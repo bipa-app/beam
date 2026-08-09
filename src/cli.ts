@@ -5,6 +5,7 @@ import {
   cmdDoctor,
   cmdInit,
   cmdKill,
+  cmdLogin,
   cmdLs,
   cmdStatus,
   cmdTargets,
@@ -18,6 +19,7 @@ usage: beam <command> [args]
   init              write a sample config (~/.beam/config.json)
   targets           list configured targets
   doctor [target]   verify ssh/rsync/tmux/harness on a target
+  login [target]    interactive harness login on a target (never copies credentials)
   up                ship workspace + session, resume the agent remotely
   ls                list handoffs
   status [id]       remote liveness + last pane output
@@ -43,6 +45,8 @@ async function main(): Promise<void> {
       return cmdUp(rest);
     case "down":
       return cmdDown(rest);
+    case "login":
+      return cmdLogin(rest);
     case "ls":
     case "list":
       return cmdLs();

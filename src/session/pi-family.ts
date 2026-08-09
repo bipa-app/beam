@@ -41,6 +41,10 @@ const PI_WORKSPACE_SESSION_DIR = ".beam/pi-sessions";
 interface PiFamilySpec {
   tool: ToolName;
   binary: string;
+  /** Interactive login command; run over ssh -t by `beam login`. */
+  loginArgv: string[];
+  /** Optional remote probe: exit 0 = authenticated (best-effort). */
+  remoteAuthProbe?: string;
   /** Store root segments under the home directory. */
   storeSegments: string[];
   /** Fast-path store directory names for a cwd; a header-cwd scan backs them up. */
@@ -57,6 +61,8 @@ const OMP_SPEC: PiFamilySpec = {
   tool: "omp",
   binary: "omp",
   storeSegments: [".omp", "agent", "sessions"],
+  loginArgv: ["omp"],
+  // omp keeps auth in its agent db/broker — no file-detectable probe.
   dirCandidates(cwd, home) {
     const candidates: string[] = [];
     if (cwd.startsWith(home)) candidates.push(cwd.slice(home.length).replaceAll("/", "-"));
@@ -78,6 +84,9 @@ const PI_SPEC: PiFamilySpec = {
   tool: "pi",
   binary: "pi",
   storeSegments: [".pi", "agent", "sessions"],
+  loginArgv: ["pi"],
+  // pi stores provider keys in a plain file (ground-truthed on pi 0.84).
+  remoteAuthProbe: 'test -s "$HOME/.pi/agent/auth.json"',
   dirCandidates(cwd) {
     // /a/b -> --a-b-- : the cwd wrapped in dashes with `/` -> `-`.
     return [`-${cwd}-`.replaceAll("/", "-")];
@@ -156,10 +165,14 @@ function newestSessionIn(dir: string, sessionRef?: string): { file: string; mtim
 export class PiFamilyAdapter implements SessionAdapter {
   readonly tool: ToolName;
   readonly binary: string;
+  readonly loginArgv: string[];
+  readonly remoteAuthProbe?: string;
 
   constructor(private readonly spec: PiFamilySpec) {
     this.tool = spec.tool;
     this.binary = spec.binary;
+    this.loginArgv = spec.loginArgv;
+    this.remoteAuthProbe = spec.remoteAuthProbe;
   }
 
   async locate(cwd: string, home: string, sessionRef?: string): Promise<LocalSession | undefined> {

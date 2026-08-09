@@ -54,6 +54,19 @@ export async function cmdUp(args: string[]): Promise<void> {
     console.log(`session: ${detected.adapter.tool} ${detected.session.id}`);
   }
 
+  // Credentials never travel with the workspace — probe the target's auth
+  // state (best-effort) so a login gap surfaces before the mirror ships.
+  if (detected?.adapter.remoteAuthProbe) {
+    const probe = await t.exec(detected.adapter.remoteAuthProbe);
+    if (probe.code !== 0) {
+      console.warn(
+        `warning: ${detected.adapter.binary} looks NOT logged in on ${targetName}.\n` +
+          `         run: beam login ${targetName} --tool ${detected.adapter.tool}\n` +
+          `         (shipping anyway — the agent will sit at a login prompt and your kickoff may be lost)`,
+      );
+    }
+  }
+
   const root = spec.root ?? DEFAULT_ROOT;
   const wsDir = `${root}/${remoteWorkspaceName(localCwd)}`;
   await t.execChecked(`mkdir -p ${shqRemotePath(wsDir)}`);

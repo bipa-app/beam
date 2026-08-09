@@ -147,3 +147,46 @@ describe("codex adapter", () => {
     expect(found?.id).toBe("id-1");
   });
 });
+
+describe("remote auth probes (credentials never travel; beam login is the fix)", () => {
+  test("codex and pi probes flip on their auth files", async () => {
+    const home = fixtureHome();
+    const t = new LocalTransport(home);
+    const codex = new CodexAdapter();
+    const pi = new PiAdapter();
+
+    expect((await t.exec(codex.remoteAuthProbe!)).code).not.toBe(0);
+    expect((await t.exec(pi.remoteAuthProbe!)).code).not.toBe(0);
+
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "auth.json"), "{}");
+    mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+    writeFileSync(join(home, ".pi", "agent", "auth.json"), "{}");
+
+    expect((await t.exec(codex.remoteAuthProbe!)).code).toBe(0);
+    expect((await t.exec(pi.remoteAuthProbe!)).code).toBe(0);
+  });
+
+  test("claude probe trusts the credentials file, and the Keychain on macOS", async () => {
+    const home = fixtureHome();
+    const t = new LocalTransport(home);
+    const probe = new ClaudeAdapter().remoteAuthProbe!;
+
+    const withoutFile = (await t.exec(probe)).code;
+    if (process.platform === "darwin") {
+      expect(withoutFile).toBe(0); // Keychain-backed: indeterminate must pass
+    } else {
+      expect(withoutFile).not.toBe(0);
+    }
+
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude", ".credentials.json"), "{}");
+    expect((await t.exec(probe)).code).toBe(0);
+  });
+
+  test("omp has no probe but always has a login command", () => {
+    const omp = new OmpAdapter();
+    expect(omp.remoteAuthProbe).toBeUndefined();
+    expect(omp.loginArgv).toEqual(["omp"]);
+  });
+});
