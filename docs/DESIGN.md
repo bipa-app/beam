@@ -26,7 +26,7 @@ beam CLI (Bun/TS, zero runtime deps)
   up · down · attach · status · ls · kill · doctor · init · targets
         │
         ├── SessionAdapter   what a "session" is for one harness
-        │     omp · claude · codex
+        │     omp · pi · claude · codex
         │     locate / install / resumeArgv / collect
         │
         ├── Transport        how to reach the sandbox's shell + files
@@ -79,6 +79,7 @@ overrides, which is how tests isolate themselves.
 | Harness | Store | Resume |
 |---|---|---|
 | omp | `~/.omp/agent/sessions/<dir>/<ts>_<uuid>.jsonl`; `<dir>` is the dashed home-relative cwd (legacy) or `<scope>-<basename>-<sha256(cwd)>` (hashed); header line `{"type":"session",…,"cwd":…}`; sibling dir = artifacts | `omp --resume <path>` |
+| pi | `~/.pi/agent/sessions/<dir>/<ts>_<uuid>.jsonl`; `<dir>` = the absolute cwd wrapped in dashes with `/` → `-` (`/a/b` → `--a-b--`); same JSONL header as omp | `pi --resume` is a picker only; beam ships into a private dir and runs `pi --session-dir .beam/pi-sessions --continue "<kickoff>"` |
 | Claude Code | `~/.claude/projects/<slug>/<uuid>.jsonl`; slug = abs cwd with `/` and `.` → `-` (older versions also dashed `_`) | `claude --resume <uuid>` from the cwd |
 | Codex | `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`; line 1 `session_meta` carries id + cwd | `codex resume <id>` |
 

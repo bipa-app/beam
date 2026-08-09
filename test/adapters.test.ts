@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeProjectSlug, ClaudeAdapter } from "../src/session/claude.ts";
 import { CodexAdapter } from "../src/session/codex.ts";
-import { OmpAdapter, rewriteOmpHeaderCwd } from "../src/session/omp.ts";
+import { OmpAdapter, PiAdapter, rewriteSessionHeaderCwd } from "../src/session/pi-family.ts";
+import { LocalTransport } from "../src/transport/local.ts";
 
 function fixtureHome(): string {
   return mkdtempSync(join(tmpdir(), "beam-home-"));
@@ -16,16 +17,16 @@ const OMP_HEADER = (cwd: string) =>
   `{"type":"message","id":"m1"}\n`;
 
 describe("omp adapter", () => {
-  test("rewriteOmpHeaderCwd only touches the session header line", () => {
-    const out = rewriteOmpHeaderCwd(OMP_HEADER("/old/path"), "/new/path");
+  test("rewriteSessionHeaderCwd only touches the session header line", () => {
+    const out = rewriteSessionHeaderCwd(OMP_HEADER("/old/path"), "/new/path");
     const lines = out.split("\n");
     expect(JSON.parse(lines[1]!).cwd).toBe("/new/path");
     expect(lines[0]).toBe(`{"type":"title","v":1,"title":"t"}`);
     expect(lines[2]).toBe(`{"type":"message","id":"m1"}`);
   });
 
-  test("rewriteOmpHeaderCwd throws when no header exists", () => {
-    expect(() => rewriteOmpHeaderCwd(`{"type":"message"}`, "/x")).toThrow(/header/);
+  test("rewriteSessionHeaderCwd throws when no header exists", () => {
+    expect(() => rewriteSessionHeaderCwd(`{"type":"message"}`, "/x")).toThrow(/header/);
   });
 
   test("locate finds newest session via dashed home-relative dir", async () => {
@@ -51,6 +52,44 @@ describe("omp adapter", () => {
 
     const found = await new OmpAdapter().locate(cwd, home);
     expect(found?.id).toBe("x1");
+  });
+});
+
+describe("pi adapter", () => {
+  test("locate finds sessions via the wrapped-dash absolute-cwd dir", async () => {
+    const home = fixtureHome();
+    const cwd = "/w/proj";
+    const dir = join(home, ".pi", "agent", "sessions", "--w-proj--");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-01-01T00-00-00-000Z_pi1.jsonl"), OMP_HEADER(cwd));
+
+    const found = await new PiAdapter().locate(cwd, home);
+    expect(found?.id).toBe("pi1");
+  });
+
+  test("install ships into a private session dir and resumes via --continue", async () => {
+    const home = fixtureHome();
+    const cwd = join(home, "w");
+    const store = join(home, ".pi", "agent", "sessions", `-${cwd}-`.replaceAll("/", "-"));
+    mkdirSync(store, { recursive: true });
+    const file = join(store, "2026-01-01T00-00-00-000Z_pi2.jsonl");
+    writeFileSync(file, OMP_HEADER(cwd));
+
+    const adapter = new PiAdapter();
+    const session = await adapter.locate(cwd, home);
+    expect(session?.id).toBe("pi2");
+
+    const remoteCwd = join(home, "remote-ws");
+    const installed = await adapter.install(new LocalTransport(home), session!, remoteCwd, "go");
+    expect(installed.resumeArgv).toEqual([
+      "pi",
+      "--session-dir",
+      ".beam/pi-sessions",
+      "--continue",
+      "go",
+    ]);
+    const shipped = readFileSync(join(remoteCwd, ".beam", "pi-sessions", "session.jsonl"), "utf8");
+    expect(JSON.parse(shipped.split("\n")[1]!).cwd).toBe(remoteCwd);
   });
 });
 

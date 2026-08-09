@@ -1,12 +1,13 @@
 import { ClaudeAdapter } from "./claude.ts";
 import { CodexAdapter } from "./codex.ts";
-import { OmpAdapter } from "./omp.ts";
+import { OmpAdapter, PiAdapter } from "./pi-family.ts";
 import type { LocalSession, SessionAdapter, ToolName } from "./types.ts";
 
 export type { InstalledSession, LocalSession, SessionAdapter, ToolName } from "./types.ts";
 
 export const ADAPTERS: readonly SessionAdapter[] = [
   new OmpAdapter(),
+  new PiAdapter(),
   new ClaudeAdapter(),
   new CodexAdapter(),
 ];
@@ -35,7 +36,7 @@ export async function detectSession(
   }
   if (found.length === 0) {
     throw new Error(
-      `no ${tool ?? "omp/claude/codex"} session found for ${cwd}` +
+      `no ${tool ?? "omp/pi/claude/codex"} session found for ${cwd}` +
         (sessionRef ? ` matching "${sessionRef}"` : "") +
         " — run the harness here first, or pass --tool/--session",
     );

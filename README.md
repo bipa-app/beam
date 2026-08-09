@@ -1,7 +1,7 @@
 # beam
 
 Hand a live coding-agent session to a remote sandboxed server — and bring it
-back. Supports **omp**, **Claude Code**, and **Codex** sessions.
+back. Supports **omp**, **pi**, **Claude Code**, and **Codex** sessions.
 
 The use case: *you need to turn off your computer, but you want the agent to
 continue working on what you're doing.*
@@ -31,7 +31,7 @@ bun link        # exposes `beam`
 ```
 
 Requirements — local: [Bun](https://bun.sh), rsync, ssh. Server: sshd, rsync,
-tmux, and the harness you use (`omp` / `claude` / `codex`) installed **and
+tmux, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed **and
 logged in** (auth is per-machine).
 
 ## Quickstart

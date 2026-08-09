@@ -12,7 +12,7 @@ export const UP_HELP = `beam up — ship this workspace + session to a target an
 
 usage: beam up [options]
   --target, -t <name>     configured target (default: config defaultTarget)
-  --tool <omp|claude|codex>  harness to hand off (default: auto-detect newest)
+  --tool <omp|pi|claude|codex>  harness to hand off (default: auto-detect newest)
   --session <ref>         session id/filename prefix (default: newest for cwd)
   --message, -m <text>    kickoff prompt so the agent starts working unattended
   --no-session            ship the workspace only

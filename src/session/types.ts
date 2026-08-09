@@ -1,6 +1,6 @@
 import type { Transport } from "../transport/types.ts";
 
-export type ToolName = "omp" | "claude" | "codex";
+export type ToolName = "omp" | "pi" | "claude" | "codex";
 
 /** A session found in a harness's local store. */
 export interface LocalSession {
