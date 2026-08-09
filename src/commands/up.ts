@@ -6,6 +6,7 @@ import { addRecord, newRecordId } from "../state.ts";
 import { createTransport } from "../transport/index.ts";
 import { TmuxRuntime } from "../runtime/tmux.ts";
 import { shqRemotePath } from "../util/shell.ts";
+import { probePrivilege } from "../security.ts";
 import { ensureGitExclude, gatherExcludes, gitSummary, remoteWorkspaceName } from "../workspace.ts";
 
 export const UP_HELP = `beam up — ship this workspace + session to a target and resume the agent there
@@ -71,6 +72,12 @@ export async function cmdUp(args: string[]): Promise<void> {
   const wsDir = `${root}/${remoteWorkspaceName(localCwd)}`;
   await t.execChecked(`mkdir -p ${shqRemotePath(wsDir)}`);
   const remoteCwd = await t.execChecked(`cd ${shqRemotePath(wsDir)} && pwd`);
+
+  // The transport credential is the blast radius — surface a dangerous
+  // posture before the mirror (secrets included) ships. Warn, never block.
+  for (const warning of (await probePrivilege(t, remoteCwd)).warnings) {
+    console.warn(`warning: ${warning}`);
+  }
 
   ensureGitExclude(localCwd);
   const excludes = gatherExcludes(localCwd, config);

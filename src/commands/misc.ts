@@ -6,6 +6,7 @@ import { findRecord, loadState, updateRecord } from "../state.ts";
 import { createTransport } from "../transport/index.ts";
 import { TmuxRuntime } from "../runtime/tmux.ts";
 import { assertPurgeablePath } from "../workspace.ts";
+import { probePrivilege } from "../security.ts";
 import { run, shjoin, shq, shqRemotePath } from "../util/shell.ts";
 
 /** beam init — write a sample config when none exists. */
@@ -171,6 +172,14 @@ export async function cmdDoctor(args: string[]): Promise<void> {
   const root = spec.root ?? DEFAULT_ROOT;
   const rootRes = await t.exec(`mkdir -p ${shqRemotePath(root)} && cd ${shqRemotePath(root)} && pwd`);
   console.log(`  root:         ${rootRes.code === 0 ? rootRes.stdout.trim() : `cannot create ${root}`}`);
+  if (rootRes.code === 0) {
+    const report = await probePrivilege(t, rootRes.stdout.trim());
+    if (report.warnings.length === 0) {
+      console.log(`  privilege:    ok (user ${report.user}, no passwordless sudo, root under home)`);
+    } else {
+      for (const w of report.warnings) console.log(`  privilege:    WARNING — ${w}`);
+    }
+  }
   console.log("\ncredentials never travel with beam — authenticate each harness on the target with `beam login`.");
 }
 
