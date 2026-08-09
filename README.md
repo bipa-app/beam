@@ -35,6 +35,10 @@ tmux, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed.
 Authenticate each harness **on the target** with `beam login` — beam never
 copies credentials between machines.
 
+> Self-hosting the sandbox? Read [docs/own-sandbox.md](docs/own-sandbox.md)
+> — VM + OS Login + IAP (recommended), in-cluster + Tailscale, and why
+> kubectl-as-transport is the last resort.
+
 ### Least-privilege server setup
 
 The ssh user you give beam **is the blast radius**: the mirrored tree
