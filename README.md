@@ -31,8 +31,9 @@ bun link        # exposes `beam`
 ```
 
 Requirements — local: [Bun](https://bun.sh), rsync, ssh. Server: sshd, rsync,
-tmux, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed **and
-logged in** (auth is per-machine).
+tmux, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed.
+Authenticate each harness **on the target** with `beam login` — beam never
+copies credentials between machines.
 
 ## Quickstart
 
@@ -40,6 +41,7 @@ logged in** (auth is per-machine).
 beam init                      # writes ~/.beam/config.json
 $EDITOR ~/.beam/config.json    # point "host" at any ssh destination
 beam doctor                    # verifies ssh, rsync, tmux, harnesses
+beam login --tool omp          # authenticate the harness ON the target (one-time)
 
 cd ~/work/my-project           # the project you're working on
 # …quit your omp/claude/codex session…
@@ -59,6 +61,7 @@ omp --resume <printed path>    # continue locally with everything it did
 | `beam init` | write a sample config |
 | `beam targets` | list configured targets |
 | `beam doctor [target]` | verify ssh/rsync/tmux/harness on a target |
+| `beam login [target]` | interactive harness login on the target over `ssh -t` (`--tool` to pick; credentials never travel) |
 | `beam up` | ship workspace + session, resume the agent remotely (`-m` kickoff prompt, `--tool`, `--session`, `--target`, `--no-start`, `--no-session`, `--no-delete`, `-v`) |
 | `beam ls` | list handoffs |
 | `beam status [id]` | remote liveness + a glimpse of the pane |
