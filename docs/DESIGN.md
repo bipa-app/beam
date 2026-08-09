@@ -128,7 +128,14 @@ codex scans newest-first and parses `session_meta`.
 
 ## Later
 
-- Docker-container-per-handoff runtime (same Runtime seam).
-- Provisioning transports: spin up a sandbox on demand (E2B, Fly, Modal, k8s).
+- The provider seam: `SandboxProvider` (provision/suspend/destroy yielding a
+  Transport) with the current ssh/local targets as the trivial provider.
+  Candidates, in rough order: a `gce` provider (start/stop the own-sandbox VM
+  around handoffs — see `docs/own-sandbox.md`), box.ascii.dev (native ssh +
+  snapshot/fork, CLI `--json`, zero new deps — parked as the managed-provider
+  experiment), Daytona, E2B, kubectl/GKE Agent Sandbox (with its RBAC bundle).
+- A `herdr` Runtime (github.com/herdrdev/herdr) beside tmux: structured
+  working/blocked/idle state for `beam status` via its socket API, and
+  reattach lands in an agent dashboard instead of a bare pane.
 - `beam sync` — periodic bidirectional sync while the remote agent runs.
 - A beam daemon + web dashboard for multi-user servers.
