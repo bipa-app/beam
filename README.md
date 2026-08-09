@@ -66,6 +66,15 @@ omp --resume <printed path>    # continue locally with everything it did
 | `beam down [id]` | stop remote agent, sync workspace back, re-import the transcript, purge the remote copy (`--no-purge` keeps it; `--keep-remote` snapshots while it keeps running) |
 | `beam kill [id]` | kill the remote agent (`--purge` also deletes the remote workspace) |
 
+### In-session: `/beam` from inside your agent
+
+Instead of quitting the harness first, install the thin integrations under
+[`integrations/`](integrations/README.md): a `/beam` slash-command extension
+for **omp**/**pi**, a `/beam-up` command for **Claude Code**, and a prompt for
+**Codex**. They shell out to this CLI, wait for the agent to go idle, ship,
+and (omp/pi) switch the local window to a fresh session so the shipped
+transcript stops growing locally.
+
 ## Configuration
 
 `~/.beam/config.json`:
