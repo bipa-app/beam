@@ -7,12 +7,20 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - name: Install e2e deps (tmux for the round-trip test)
+      - name: Install e2e deps (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tmux rsync
+      - name: Install e2e deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
       - run: bun test
