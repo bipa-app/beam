@@ -21,6 +21,8 @@ interface SessionMeta {
 export class CodexAdapter implements SessionAdapter {
   readonly tool = "codex" as const;
   readonly binary = "codex";
+  readonly loginArgv = ["codex", "login"];
+  readonly remoteAuthProbe = 'test -s "$HOME/.codex/auth.json"';
 
   async locate(cwd: string, home: string, sessionRef?: string): Promise<LocalSession | undefined> {
     const root = join(home, ".codex", "sessions");

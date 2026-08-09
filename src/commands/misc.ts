@@ -1,12 +1,12 @@
 import { parseArgs } from "node:util";
 import { configPath, loadConfig, resolveTarget, writeSampleConfig, DEFAULT_ROOT } from "../config.ts";
 import { resolveEnv } from "../env.ts";
-import { ADAPTERS, adapterFor } from "../session/index.ts";
+import { ADAPTERS, adapterFor, detectSession, type ToolName } from "../session/index.ts";
 import { findRecord, loadState, updateRecord } from "../state.ts";
 import { createTransport } from "../transport/index.ts";
 import { TmuxRuntime } from "../runtime/tmux.ts";
 import { assertPurgeablePath } from "../workspace.ts";
-import { run, shq, shqRemotePath } from "../util/shell.ts";
+import { run, shjoin, shq, shqRemotePath } from "../util/shell.ts";
 
 /** beam init — write a sample config when none exists. */
 export async function cmdInit(): Promise<void> {
@@ -153,10 +153,58 @@ export async function cmdDoctor(args: string[]): Promise<void> {
   }
   for (const adapter of ADAPTERS) {
     const res = await t.exec(`command -v ${shq(adapter.binary)}`);
-    console.log(`  remote ${adapter.binary}:${" ".repeat(Math.max(1, 6 - adapter.binary.length))}${res.code === 0 ? res.stdout.trim() : "not installed"}`);
+    const pad = " ".repeat(Math.max(1, 6 - adapter.binary.length));
+    if (res.code !== 0) {
+      console.log(`  remote ${adapter.binary}:${pad}not installed`);
+      continue;
+    }
+    let auth = "";
+    if (adapter.remoteAuthProbe) {
+      const probe = await t.exec(adapter.remoteAuthProbe);
+      auth =
+        probe.code === 0
+          ? " · authenticated"
+          : ` · NOT LOGGED IN → beam login ${name} --tool ${adapter.tool}`;
+    }
+    console.log(`  remote ${adapter.binary}:${pad}${res.stdout.trim()}${auth}`);
   }
   const root = spec.root ?? DEFAULT_ROOT;
   const rootRes = await t.exec(`mkdir -p ${shqRemotePath(root)} && cd ${shqRemotePath(root)} && pwd`);
   console.log(`  root:         ${rootRes.code === 0 ? rootRes.stdout.trim() : `cannot create ${root}`}`);
-  console.log("\nremember: the harness on the target must be logged in (omp/pi/claude/codex auth is per-machine).");
+  console.log("\ncredentials never travel with beam — authenticate each harness on the target with `beam login`.");
+}
+
+/** beam login [target] — interactive harness login on the target (ssh -t). */
+export async function cmdLogin(args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { tool: { type: "string" }, help: { type: "boolean", short: "h" } },
+    allowPositionals: true,
+  });
+  const env = resolveEnv();
+  const config = loadConfig(env);
+  const { name, spec } = resolveTarget(config, positionals[0]);
+  const t = createTransport(spec);
+
+  let tool = values.tool as ToolName | undefined;
+  if (!tool) {
+    const detected = await detectSession(process.cwd(), env.home).catch(() => undefined);
+    tool = detected?.adapter.tool;
+  }
+  if (!tool) {
+    throw new Error("pass --tool omp|pi|claude|codex (no session in this directory to infer it from)");
+  }
+  const adapter = adapterFor(tool);
+
+  console.log(`opening interactive ${shjoin(adapter.loginArgv)} on ${name} — complete the login, then exit`);
+  const res = await run(t.interactiveArgv(shjoin(adapter.loginArgv)), { interactive: true });
+  if (res.code !== 0) console.error(`login command exited ${res.code}`);
+  if (adapter.remoteAuthProbe) {
+    const probe = await t.exec(adapter.remoteAuthProbe);
+    console.log(
+      probe.code === 0
+        ? `${adapter.binary}: authenticated on ${name}`
+        : `${adapter.binary}: still not authenticated on ${name}`,
+    );
+  }
 }

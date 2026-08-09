@@ -64,6 +64,9 @@ Both must be green before any push. CI runs them on ubuntu AND macos.
   `rm -rf`.
 - beam ships working trees as-is (secrets included, by design). Never widen
   what is shipped or where, silently.
+- beam NEVER copies or ships harness credentials/auth state between machines.
+  Authentication happens on the target through `beam login` (interactive over
+  `ssh -t`); auth probes are best-effort detection, not a bypass.
 
 ## Testing rules
 

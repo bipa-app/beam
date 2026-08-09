@@ -20,6 +20,10 @@ export function claudeProjectSlug(cwd: string): string {
 export class ClaudeAdapter implements SessionAdapter {
   readonly tool = "claude" as const;
   readonly binary = "claude";
+  readonly loginArgv = ["claude"];
+  // Linux stores OAuth in a credentials file; macOS uses the Keychain, so
+  // Darwin is treated as indeterminate-pass rather than blocking real users.
+  readonly remoteAuthProbe = '[ -f "$HOME/.claude/.credentials.json" ] || [ "$(uname)" = "Darwin" ]';
 
   async locate(cwd: string, home: string, sessionRef?: string): Promise<LocalSession | undefined> {
     const projects = join(home, ".claude", "projects");

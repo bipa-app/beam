@@ -32,6 +32,17 @@ export interface SessionAdapter {
   /** Binary expected on the target (checked by `beam doctor`). */
   readonly binary: string;
   /**
+   * Interactive command that authenticates the harness on the target.
+   * beam NEVER copies credentials between machines; `beam login` runs this
+   * over the transport's interactive channel (ssh -t) instead.
+   */
+  readonly loginArgv: string[];
+  /**
+   * Optional cheap remote probe: exit 0 = authenticated. Best-effort —
+   * absent when a harness has no file-detectable auth state.
+   */
+  readonly remoteAuthProbe?: string;
+  /**
    * Find the session for `cwd` in the local store under `home`.
    * `sessionRef` narrows by id/filename prefix; otherwise newest wins.
    */

@@ -103,8 +103,12 @@ codex scans newest-first and parses `session_meta`.
   and `beam down` purges the remote copy by default so nothing lingers.
 - **openrsync (macOS) vs GNU rsync** — conservative default flags (`-a -z`),
   per-target `rsyncFlags` override.
-- **Harness auth on the server** is a one-time manual step (`omp`/`claude`/
-  `codex` login). `beam doctor` reports which binaries are present.
+- **Credentials never travel.** beam refuses the "copy auth.json to the
+  server" shortcut on principle: the session moves, the user re-authenticates
+  on the target via `beam login <target> --tool <harness>` (interactive over
+  `ssh -t`). Best-effort auth probes in `beam doctor` and `beam up` surface a
+  login gap early; where a harness has no file-detectable auth state (omp),
+  the probe is absent rather than wrong.
 
 ## Later
 
