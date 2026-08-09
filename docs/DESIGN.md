@@ -109,6 +109,22 @@ codex scans newest-first and parses `session_meta`.
   `ssh -t`). Best-effort auth probes in `beam doctor` and `beam up` surface a
   login gap early; where a harness has no file-detectable auth state (omp),
   the probe is absent rather than wrong.
+- **The transport credential is the blast radius.** For raw transports (ssh
+  today, kubectl later) the sandbox boundary is whatever the operator
+  configured — beam cannot create isolation it was not given. The stance:
+  - preach a paved path (README: dedicated unprivileged user, no sudo,
+    docker-group caveat);
+  - probe for dangerous postures (`src/security.ts`: root login,
+    passwordless sudo, workspace root outside the user's home) in `doctor`
+    and before every `up` — warn, never block, since compensating controls
+    exist that beam cannot see;
+  - when the kubectl transport lands, ship the RBAC bundle with it: a
+    dedicated namespace, a ServiceAccount role-scoped to pods/exec in that
+    namespace only, gVisor runtimeClass, and a doctor probe that refuses
+    kubeconfigs holding cluster-wide `*` verbs (`kubectl auth can-i`).
+  Managed providers (Daytona, E2B, Modal, Cloud Run/GKE Agent Sandbox)
+  enforce the boundary vendor-side, which is an argument for the provider
+  seam over ever-fancier raw-transport hardening.
 
 ## Later
 

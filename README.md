@@ -35,6 +35,27 @@ tmux, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed.
 Authenticate each harness **on the target** with `beam login` — beam never
 copies credentials between machines.
 
+### Least-privilege server setup
+
+The ssh user you give beam **is the blast radius**: the mirrored tree
+(secrets included) lands in its home, and the agent executes as it. Never
+point beam at `root` or a sudo-capable login on a machine you care about.
+`beam doctor` and `beam up` probe for the dangerous postures (root login,
+passwordless sudo, workspace outside the user's home) and warn.
+
+```bash
+# on the server, once, as an admin — a dedicated, unprivileged user:
+sudo adduser --disabled-password --gecos "" beam-agent
+sudo -u beam-agent mkdir -p /home/beam-agent/.ssh
+cat ~/.ssh/id_ed25519.pub | sudo -u beam-agent tee -a /home/beam-agent/.ssh/authorized_keys
+# do NOT add beam-agent to the sudo group.
+```
+
+Needs docker? Membership in the `docker` group is root-equivalent on that
+host — use rootless docker, or accept that this target must be a disposable
+VM dedicated to beam. Managed sandbox providers (Daytona, E2B, Modal, …)
+enforce this boundary for you; that is a real argument for them.
+
 ## Quickstart
 
 ```bash
