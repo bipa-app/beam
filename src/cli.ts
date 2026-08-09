@@ -27,7 +27,7 @@ usage: beam <command> [args]
 
 run \`beam up --help\` / \`beam down --help\` for command options.
 
-supported harnesses: omp, Claude Code (claude), Codex (codex)
+supported harnesses: omp, pi, Claude Code (claude), Codex (codex)
 `;
 
 async function main(): Promise<void> {

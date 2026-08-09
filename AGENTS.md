@@ -1,6 +1,6 @@
 # AGENTS.md — beam
 
-beam hands a live coding-agent session (omp, Claude Code, Codex) to a remote
+beam hands a live coding-agent session (omp, pi, Claude Code, Codex) to a remote
 sandboxed server and brings it back. Read `docs/DESIGN.md` before structural
 changes. These rules are mandatory for all contributions, human or agent.
 

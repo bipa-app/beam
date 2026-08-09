@@ -146,5 +146,5 @@ export async function cmdDoctor(args: string[]): Promise<void> {
   const root = spec.root ?? DEFAULT_ROOT;
   const rootRes = await t.exec(`mkdir -p ${shqRemotePath(root)} && cd ${shqRemotePath(root)} && pwd`);
   console.log(`  root:         ${rootRes.code === 0 ? rootRes.stdout.trim() : `cannot create ${root}`}`);
-  console.log("\nremember: the harness on the target must be logged in (omp/claude/codex auth is per-machine).");
+  console.log("\nremember: the harness on the target must be logged in (omp/pi/claude/codex auth is per-machine).");
 }
