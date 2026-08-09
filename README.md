@@ -63,7 +63,7 @@ omp --resume <printed path>    # continue locally with everything it did
 | `beam ls` | list handoffs |
 | `beam status [id]` | remote liveness + a glimpse of the pane |
 | `beam attach [id]` | attach to the remote agent's tmux |
-| `beam down [id]` | stop remote agent, sync workspace back, re-import the transcript (`--keep-remote` to snapshot while it keeps running) |
+| `beam down [id]` | stop remote agent, sync workspace back, re-import the transcript, purge the remote copy (`--no-purge` keeps it; `--keep-remote` snapshots while it keeps running) |
 | `beam kill [id]` | kill the remote agent (`--purge` also deletes the remote workspace) |
 
 ## Configuration
@@ -125,7 +125,9 @@ Three seams, all small interfaces:
 `beam up` copies your working directory **as-is** — including `.env` files and
 any secrets in the tree — to the target, and the harness on the target runs
 with whatever credentials it is logged in with. Only beam to servers you trust
-like your own laptop.
+like your own laptop. `beam down` purges the remote workspace and any session
+files beam installed by default, so nothing lingers after the work is home
+(`--no-purge` opts out).
 
 ## Development
 

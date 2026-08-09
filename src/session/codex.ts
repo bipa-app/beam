@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { shqRemotePath } from "../util/shell.ts";
 import type { Transport } from "../transport/types.ts";
 import type { InstalledSession, LocalSession, SessionAdapter } from "./types.ts";
 
@@ -87,5 +88,10 @@ export class CodexAdapter implements SessionAdapter {
     }
     await t.fetchFile(remoteStore, session.file);
     return `codex resume ${session.id}`;
+  }
+
+  async cleanupRemote(t: Transport, session: LocalSession, _remoteCwd: string): Promise<void> {
+    const home = session.file.split("/.codex/")[0]!;
+    await t.exec(`rm -f ${shqRemotePath(this.remoteStorePath(session, home))}`);
   }
 }

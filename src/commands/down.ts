@@ -5,14 +5,20 @@ import { adapterFor } from "../session/index.ts";
 import { findRecord, updateRecord } from "../state.ts";
 import { createTransport } from "../transport/index.ts";
 import { TmuxRuntime } from "../runtime/tmux.ts";
-import { gatherExcludes } from "../workspace.ts";
+import { assertPurgeablePath, gatherExcludes } from "../workspace.ts";
+import { shq } from "../util/shell.ts";
 
-export const DOWN_HELP = `beam down — stop the remote agent, sync the workspace back, re-import the session
+export const DOWN_HELP = `beam down — stop the remote agent, sync back, re-import the session, purge the remote copy
 
 usage: beam down [id] [options]
   --keep-remote     leave the remote agent running; just sync current state back
+  --no-purge        keep the remote workspace after syncing (faster re-ships)
   --delete          mirror remote deletions into the local workspace
   --verbose, -v     stream rsync progress
+
+by default the remote workspace and any session files beam installed on the
+target are deleted once everything is safely back — the mirror carries your
+whole working tree (secrets included), so nothing should linger.
 `;
 
 const STOP_GRACE_MS = 3000;
@@ -22,6 +28,7 @@ export async function cmdDown(args: string[]): Promise<void> {
     args,
     options: {
       "keep-remote": { type: "boolean" },
+      "no-purge": { type: "boolean" },
       delete: { type: "boolean" },
       verbose: { type: "boolean", short: "v" },
       help: { type: "boolean", short: "h" },
@@ -77,6 +84,27 @@ export async function cmdDown(args: string[]): Promise<void> {
       record.remoteCwd,
     );
     console.log(`session re-imported (previous copy backed up next to it)`);
+  }
+
+  const purge = !keepRemote && values["no-purge"] !== true;
+  if (purge) {
+    assertPurgeablePath(record.remoteCwd);
+    await runtime.kill(record.tmux);
+    await t.execChecked(`rm -rf ${shq(record.remoteCwd)}`);
+    if (record.tool && record.sessionFile && record.sessionId) {
+      await adapterFor(record.tool).cleanupRemote(
+        t,
+        {
+          tool: record.tool,
+          id: record.sessionId,
+          file: record.sessionFile,
+          artifactsDir: record.artifactsDir,
+          mtime: 0,
+        },
+        record.remoteCwd,
+      );
+    }
+    console.log(`purged remote workspace ${record.remoteCwd}`);
   }
 
   updateRecord(env, record.id, { status: keepRemote ? "up" : "down" });

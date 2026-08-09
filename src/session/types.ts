@@ -56,4 +56,10 @@ export interface SessionAdapter {
     localCwd: string,
     remoteCwd: string,
   ): Promise<string>;
+  /**
+   * Remove every trace the install left OUTSIDE the workspace (the
+   * workspace itself is purged by `beam down`/`kill --purge`). Transcripts
+   * carry the whole conversation, so leaving them on the target is a leak.
+   */
+  cleanupRemote(t: Transport, session: LocalSession, remoteCwd: string): Promise<void>;
 }

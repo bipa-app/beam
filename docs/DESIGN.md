@@ -73,6 +73,13 @@ overrides, which is how tests isolate themselves.
 5. **ssh is the server API.** Any box you can ssh into is a target. A richer
    backend (HTTP daemon, provisioning API) slots in later as another
    Transport+Runtime pair without touching commands.
+6. **Purge by default.** The mirror carries the whole working tree — secrets
+   included — so `beam down` deletes the remote workspace and any session
+   files beam installed outside it (claude/codex home stores) once everything
+   is safely back. `--no-purge` trades that hygiene for faster re-ships;
+   `--keep-remote` (still running) implies no purge. `kill --purge` covers the
+   abandon path. Adapters own their out-of-workspace traces via
+   `cleanupRemote`.
 
 ## Session store formats (ground truth)
 
@@ -92,7 +99,8 @@ codex scans newest-first and parses `session_meta`.
 - **Divergence** — resuming locally while a session is beamed advances both
   transcripts. `beam down` always backs up the local copy before overwriting.
   The intended workflow is stop-local-then-beam.
-- **Secrets travel by design** — the target must be trusted like the laptop.
+- **Secrets travel by design** — the target must be trusted like the laptop,
+  and `beam down` purges the remote copy by default so nothing lingers.
 - **openrsync (macOS) vs GNU rsync** — conservative default flags (`-a -z`),
   per-target `rsyncFlags` override.
 - **Harness auth on the server** is a one-time manual step (`omp`/`claude`/

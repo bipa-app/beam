@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalTransport } from "../src/transport/local.ts";
-import { ensureGitExclude, gatherExcludes, remoteWorkspaceName } from "../src/workspace.ts";
+import { assertPurgeablePath, ensureGitExclude, gatherExcludes, remoteWorkspaceName } from "../src/workspace.ts";
 
 const HAVE_RSYNC = Bun.which("rsync") !== null;
 
@@ -34,6 +34,13 @@ describe("workspace helpers", () => {
     ensureGitExclude(repo);
     const content = readFileSync(join(repo, ".git", "info", "exclude"), "utf8");
     expect(content.split("\n").filter((l) => l === ".beam/").length).toBe(1);
+  });
+
+  test("assertPurgeablePath refuses paths an rm -rf must never see", () => {
+    for (const bad of ["/", "/etc", "short", "/a/../..", "no-slashes"]) {
+      expect(() => assertPurgeablePath(bad)).toThrow(/refusing to purge/);
+    }
+    expect(() => assertPurgeablePath("/home/user/beam/app-1234abcd")).not.toThrow();
   });
 });
 
