@@ -67,6 +67,10 @@ Both must be green before any push. CI runs them on ubuntu AND macos.
 - beam NEVER copies or ships harness credentials/auth state between machines.
   Authentication happens on the target through `beam login` (interactive over
   `ssh -t`); auth probes are best-effort detection, not a bypass.
+- The transport credential is the blast radius. A new transport or sandbox
+  provider MUST ship with least-privilege guidance (README) and `doctor`
+  probes for its dangerous postures — an ssh transport probes root/sudo, a
+  kubectl transport must refuse cluster-admin kubeconfigs, and so on.
 
 ## Testing rules
 
