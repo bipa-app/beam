@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeProjectSlug, ClaudeAdapter } from "../src/session/claude.ts";
@@ -107,6 +107,28 @@ describe("claude adapter", () => {
 
     const found = await new ClaudeAdapter().locate(cwd, home);
     expect(found?.id).toBe("11111111-2222-3333-4444-555555555555");
+  });
+
+  test("cleanupRemote removes the installed transcript and its project dir", async () => {
+    const home = fixtureHome();
+    const remoteCwd = join(home, "remote-ws");
+    const t = new LocalTransport(home);
+    const session = {
+      tool: "claude" as const,
+      id: "11111111-2222-3333-4444-555555555555",
+      file: join(home, "unused.jsonl"),
+      mtime: 0,
+    };
+    writeFileSync(session.file, "{}\n");
+
+    const adapter = new ClaudeAdapter();
+    await adapter.install(t, session, remoteCwd);
+    const installedDir = join(home, ".claude", "projects", claudeProjectSlug(remoteCwd));
+    expect(existsSync(join(installedDir, `${session.id}.jsonl`))).toBe(true);
+
+    await adapter.cleanupRemote(t, session, remoteCwd);
+    expect(existsSync(join(installedDir, `${session.id}.jsonl`))).toBe(false);
+    expect(existsSync(installedDir)).toBe(false);
   });
 });
 

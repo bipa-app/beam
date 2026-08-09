@@ -40,6 +40,16 @@ export function ensureGitExclude(localCwd: string): void {
   appendFileSync(excludeFile, (current.endsWith("\n") || current === "" ? "" : "\n") + ".beam/\n");
 }
 
+/**
+ * Refuse to rm -rf anything that does not look like a beam workspace path.
+ * Shared by `beam down` (purge-by-default) and `beam kill --purge`.
+ */
+export function assertPurgeablePath(remoteCwd: string): void {
+  const suspicious =
+    remoteCwd === "/" || remoteCwd.length < 8 || !remoteCwd.includes("/") || remoteCwd.includes("..");
+  if (suspicious) throw new Error(`refusing to purge suspicious path: ${remoteCwd}`);
+}
+
 /** Best-effort one-line git summary for display. */
 export async function gitSummary(localCwd: string): Promise<string | undefined> {
   const branch = await run(["git", "-C", localCwd, "rev-parse", "--abbrev-ref", "HEAD"]);

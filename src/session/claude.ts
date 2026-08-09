@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { shqRemotePath } from "../util/shell.ts";
 import type { Transport } from "../transport/types.ts";
 import type { InstalledSession, LocalSession, SessionAdapter } from "./types.ts";
 
@@ -71,5 +72,12 @@ export class ClaudeAdapter implements SessionAdapter {
     }
     await t.fetchFile(remoteStore, session.file);
     return `claude --resume ${session.id}`;
+  }
+
+  async cleanupRemote(t: Transport, session: LocalSession, remoteCwd: string): Promise<void> {
+    const dir = `~/.claude/projects/${claudeProjectSlug(remoteCwd)}`;
+    await t.exec(`rm -f ${shqRemotePath(`${dir}/${session.id}.jsonl`)}`);
+    // Drop the project dir too when ours was the only session in it.
+    await t.exec(`rmdir ${shqRemotePath(dir)} 2>/dev/null || true`);
   }
 }

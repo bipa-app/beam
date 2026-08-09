@@ -1,10 +1,11 @@
 import { parseArgs } from "node:util";
 import { configPath, loadConfig, resolveTarget, writeSampleConfig, DEFAULT_ROOT } from "../config.ts";
 import { resolveEnv } from "../env.ts";
-import { ADAPTERS } from "../session/index.ts";
+import { ADAPTERS, adapterFor } from "../session/index.ts";
 import { findRecord, loadState, updateRecord } from "../state.ts";
 import { createTransport } from "../transport/index.ts";
 import { TmuxRuntime } from "../runtime/tmux.ts";
+import { assertPurgeablePath } from "../workspace.ts";
 import { run, shq, shqRemotePath } from "../util/shell.ts";
 
 /** beam init — write a sample config when none exists. */
@@ -111,10 +112,21 @@ export async function cmdKill(args: string[]): Promise<void> {
   await runtime.kill(record.tmux);
   console.log(`killed remote agent for ${record.id}`);
   if (values.purge) {
-    if (!record.remoteCwd.includes("/") || record.remoteCwd.length < 8 || record.remoteCwd === "/") {
-      throw new Error(`refusing to purge suspicious path: ${record.remoteCwd}`);
-    }
+    assertPurgeablePath(record.remoteCwd);
     await t.execChecked(`rm -rf ${shq(record.remoteCwd)}`);
+    if (record.tool && record.sessionFile && record.sessionId) {
+      await adapterFor(record.tool).cleanupRemote(
+        t,
+        {
+          tool: record.tool,
+          id: record.sessionId,
+          file: record.sessionFile,
+          artifactsDir: record.artifactsDir,
+          mtime: 0,
+        },
+        record.remoteCwd,
+      );
+    }
     console.log(`purged ${record.remoteCwd}`);
   }
   updateRecord(env, record.id, { status: "killed" });

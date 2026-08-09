@@ -166,6 +166,9 @@ describe.skipIf(!HAVE_DEPS)("beam up/down round trip (local transport)", () => {
       // agent session is gone from the private tmux server
       const has = await run(["tmux", "-L", TMUX_SOCKET, "has-session", "-t", `=${record.tmux}`]);
       expect(has.code).not.toBe(0);
+
+      // the remote mirror (secrets included) is purged once everything is home
+      expect(existsSync(join(remoteRoot, remoteWorkspaceName(workDir)))).toBe(false);
     },
     30_000,
   );

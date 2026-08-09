@@ -237,6 +237,11 @@ export class PiFamilyAdapter implements SessionAdapter {
     }
     return this.spec.localResumeHint(session.file, localCwd);
   }
+
+  async cleanupRemote(_t: Transport, _session: LocalSession, _remoteCwd: string): Promise<void> {
+    // The transcript ships inside the workspace (.beam/), so purging the
+    // workspace removes every trace. Nothing lives outside it.
+  }
 }
 
 export class OmpAdapter extends PiFamilyAdapter {
