@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeProjectSlug, ClaudeAdapter } from "../src/session/claude.ts";
@@ -43,6 +53,20 @@ describe("omp adapter", () => {
     expect(found?.file.endsWith("_new.jsonl")).toBe(true);
   });
 
+  test("locate finds wrapped absolute-cwd sessions despite a header path alias", async () => {
+    const home = fixtureHome();
+    const cwd = "/private/tmp/beam-live";
+    const dir = join(home, ".omp", "agent", "sessions", "--private-tmp-beam-live--");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "2026-01-03T00-00-00-000Z_live.jsonl"),
+      OMP_HEADER("/tmp/beam-live"),
+    );
+
+    const found = await new OmpAdapter().locate(cwd, home);
+    expect(found?.id).toBe("live");
+  });
+
   test("locate falls back to header-cwd scan for foreign dir names", async () => {
     const home = fixtureHome();
     const cwd = "/somewhere/outside/home";
@@ -52,6 +76,73 @@ describe("omp adapter", () => {
 
     const found = await new OmpAdapter().locate(cwd, home);
     expect(found?.id).toBe("x1");
+  });
+
+  test("locate skips a newer foreign transcript in the slug dir", async () => {
+    const home = fixtureHome();
+    const cwd = join(home, "work", "app");
+    const dir = join(home, ".omp", "agent", "sessions", "-work-app");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-01-01T00-00-00-000Z_mine.jsonl"), OMP_HEADER(cwd));
+    writeFileSync(join(dir, "2026-01-02T00-00-00-000Z_foreign.jsonl"), OMP_HEADER("/elsewhere/app"));
+    utimesSync(join(dir, "2026-01-01T00-00-00-000Z_mine.jsonl"), new Date(1000), new Date(1000));
+
+    const found = await new OmpAdapter().locate(cwd, home);
+    expect(found?.id).toBe("mine");
+  });
+
+  test("locate skips a corrupt newest transcript and takes the older valid one", async () => {
+    const home = fixtureHome();
+    const cwd = join(home, "work", "app");
+    const dir = join(home, ".omp", "agent", "sessions", "-work-app");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-01-01T00-00-00-000Z_ok.jsonl"), OMP_HEADER(cwd));
+    writeFileSync(join(dir, "2026-01-02T00-00-00-000Z_bad.jsonl"), "not json\n{{{\n");
+    utimesSync(join(dir, "2026-01-01T00-00-00-000Z_ok.jsonl"), new Date(1000), new Date(1000));
+
+    const found = await new OmpAdapter().locate(cwd, home);
+    expect(found?.id).toBe("ok");
+  });
+
+  test("locate accepts a /tmp-requested cwd against a /private/tmp header", async () => {
+    const home = fixtureHome();
+    const cwd = "/tmp/beam-live";
+    const dir = join(home, ".omp", "agent", "sessions", "--tmp-beam-live--");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "2026-01-03T00-00-00-000Z_alias.jsonl"),
+      OMP_HEADER("/private/tmp/beam-live"),
+    );
+
+    const found = await new OmpAdapter().locate(cwd, home);
+    expect(found?.id).toBe("alias");
+  });
+
+  test("locate fallback digs past newer non-matching files in a foreign-named dir", async () => {
+    const home = fixtureHome();
+    const cwd = "/somewhere/outside/home";
+    const dir = join(home, ".omp", "agent", "sessions", "opaque-dir-name");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-01-01T00-00-00-000Z_x1.jsonl"), OMP_HEADER(cwd));
+    writeFileSync(join(dir, "2026-01-02T00-00-00-000Z_other.jsonl"), OMP_HEADER("/other/ws"));
+    writeFileSync(join(dir, "2026-01-03T00-00-00-000Z_junk.jsonl"), "corrupt\n");
+    utimesSync(join(dir, "2026-01-01T00-00-00-000Z_x1.jsonl"), new Date(1000), new Date(1000));
+
+    const found = await new OmpAdapter().locate(cwd, home);
+    expect(found?.id).toBe("x1");
+  });
+
+  test("locate honors sessionRef among validated matches", async () => {
+    const home = fixtureHome();
+    const cwd = join(home, "work", "app");
+    const dir = join(home, ".omp", "agent", "sessions", "-work-app");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-01-01T00-00-00-000Z_aaa.jsonl"), OMP_HEADER(cwd));
+    writeFileSync(join(dir, "2026-01-02T00-00-00-000Z_bbb.jsonl"), OMP_HEADER(cwd));
+    utimesSync(join(dir, "2026-01-01T00-00-00-000Z_aaa.jsonl"), new Date(1000), new Date(1000));
+
+    const found = await new OmpAdapter().locate(cwd, home, "aaa");
+    expect(found?.id).toBe("aaa");
   });
 });
 
@@ -65,6 +156,29 @@ describe("pi adapter", () => {
 
     const found = await new PiAdapter().locate(cwd, home);
     expect(found?.id).toBe("pi1");
+  });
+
+  test("locate never ships a slug-colliding neighbor's transcript", async () => {
+    const home = fixtureHome();
+    // /private/tmp/a/b and /private/tmp/a-b collapse to the same wrapped-dash slug.
+    const dir = join(home, ".pi", "agent", "sessions", "--private-tmp-a-b--");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-01-01T00-00-00-000Z_ours.jsonl"), OMP_HEADER("/private/tmp/a/b"));
+    writeFileSync(
+      join(dir, "2026-01-02T00-00-00-000Z_neighbor.jsonl"),
+      OMP_HEADER("/private/tmp/a-b"),
+    );
+    mkdirSync(join(dir, "2026-01-01T00-00-00-000Z_ours"), { recursive: true });
+    utimesSync(join(dir, "2026-01-01T00-00-00-000Z_ours.jsonl"), new Date(1000), new Date(1000));
+
+    const adapter = new PiAdapter();
+    const forNested = await adapter.locate("/private/tmp/a/b", home);
+    expect(forNested?.id).toBe("ours");
+    expect(forNested?.artifactsDir).toBe(join(dir, "2026-01-01T00-00-00-000Z_ours"));
+    const forDashed = await adapter.locate("/private/tmp/a-b", home);
+    expect(forDashed?.id).toBe("neighbor");
+    // A cwd with no session anywhere never adopts the collision dir's files.
+    expect(await adapter.locate("/private/tmp/other", home)).toBeUndefined();
   });
 
   test("install ships into a private session dir and resumes via --continue", async () => {
@@ -90,6 +204,164 @@ describe("pi adapter", () => {
     ]);
     const shipped = readFileSync(join(remoteCwd, ".beam", "pi-sessions", "session.jsonl"), "utf8");
     expect(JSON.parse(shipped.split("\n")[1]!).cwd).toBe(remoteCwd);
+  });
+});
+
+describe("pi-family collect: the transcript comes off the target, never local scratch", () => {
+  function ompFixture() {
+    const home = fixtureHome();
+    const cwd = join(home, "w");
+    mkdirSync(cwd, { recursive: true });
+    const store = join(home, ".omp", "agent", "sessions", "-w");
+    mkdirSync(store, { recursive: true });
+    const file = join(store, "2026-01-01T00-00-00-000Z_abc-123.jsonl");
+    writeFileSync(file, OMP_HEADER(cwd));
+    return { home, cwd, store, file, t: new LocalTransport(home), remoteCwd: join(home, "remote-ws") };
+  }
+
+  test("collect fetches the grown remote transcript; pre-existing local scratch never wins", async () => {
+    const f = ompFixture();
+    // Stale scratch in the local workspace — the old handoff's leftovers.
+    mkdirSync(join(f.cwd, ".beam"), { recursive: true });
+    writeFileSync(join(f.cwd, ".beam", "session.jsonl"), `{"type":"session","cwd":"/old"}\nSTALE-SCRATCH\n`);
+    // The genuine grown transcript lives on the target.
+    mkdirSync(join(f.remoteCwd, ".beam"), { recursive: true });
+    writeFileSync(
+      join(f.remoteCwd, ".beam", "session.jsonl"),
+      OMP_HEADER(f.remoteCwd) + `{"type":"message","from":"remote-agent"}\n`,
+    );
+
+    const adapter = new OmpAdapter();
+    const session = (await adapter.locate(f.cwd, f.home))!;
+    await adapter.collect(f.t, session, f.cwd, f.remoteCwd);
+
+    const store = readFileSync(f.file, "utf8");
+    expect(store).toContain('"from":"remote-agent"');
+    expect(store).not.toContain("STALE-SCRATCH");
+    expect(JSON.parse(store.split("\n")[1]!).cwd).toBe(f.cwd); // header restored
+    // previous store copy backed up
+    expect(readdirSync(f.store).some((n) => n.includes(".bak-"))).toBe(true);
+  });
+
+  test("collect refuses a transcript that does not belong to this handoff and leaves the store untouched", async () => {
+    const f = ompFixture();
+    mkdirSync(join(f.remoteCwd, ".beam"), { recursive: true });
+    writeFileSync(join(f.remoteCwd, ".beam", "session.jsonl"), OMP_HEADER("/some/other/handoff"));
+
+    const adapter = new OmpAdapter();
+    const session = (await adapter.locate(f.cwd, f.home))!;
+    const before = readFileSync(f.file, "utf8");
+    await expect(adapter.collect(f.t, session, f.cwd, f.remoteCwd)).rejects.toThrow(/foreign session/);
+    expect(readFileSync(f.file, "utf8")).toBe(before);
+    expect(readdirSync(f.store).some((n) => n.includes(".bak-"))).toBe(false); // refused before touching it
+  });
+
+  test("collect fails loudly when the remote transcript is gone — local scratch is no substitute", async () => {
+    const f = ompFixture();
+    mkdirSync(join(f.cwd, ".beam"), { recursive: true });
+    writeFileSync(join(f.cwd, ".beam", "session.jsonl"), OMP_HEADER(f.remoteCwd));
+
+    const adapter = new OmpAdapter();
+    const session = (await adapter.locate(f.cwd, f.home))!;
+    await expect(adapter.collect(f.t, session, f.cwd, f.remoteCwd)).rejects.toThrow(/not found/);
+  });
+
+  test("install resets the reserved remote area: a reused workspace's stale artifacts cannot be re-imported", async () => {
+    const f = ompFixture();
+    // Leftovers from a previous handoff on a --no-purge reused workspace.
+    mkdirSync(join(f.remoteCwd, ".beam", "session"), { recursive: true });
+    writeFileSync(join(f.remoteCwd, ".beam", "session", "stale.txt"), "old artifacts\n");
+
+    const adapter = new OmpAdapter();
+    const session = (await adapter.locate(f.cwd, f.home))!;
+    await adapter.install(f.t, session, f.remoteCwd);
+
+    expect(existsSync(join(f.remoteCwd, ".beam", "session"))).toBe(false); // stale dir wiped
+    const shipped = readFileSync(join(f.remoteCwd, ".beam", "session.jsonl"), "utf8");
+    expect(JSON.parse(shipped.split("\n")[1]!).cwd).toBe(f.remoteCwd);
+  });
+
+  test("pi install wipes its private session dir wholesale — --continue must see exactly one session", async () => {
+    const home = fixtureHome();
+    const cwd = join(home, "w");
+    mkdirSync(cwd, { recursive: true });
+    const store = join(home, ".pi", "agent", "sessions", `-${cwd}-`.replaceAll("/", "-") + "-");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "2026-01-01T00-00-00-000Z_pi9.jsonl"), OMP_HEADER(cwd));
+    const t = new LocalTransport(home);
+    const remoteCwd = join(home, "remote-ws");
+    mkdirSync(join(remoteCwd, ".beam", "pi-sessions", "session"), { recursive: true });
+    writeFileSync(join(remoteCwd, ".beam", "pi-sessions", "extra.jsonl"), "{}\n");
+    writeFileSync(join(remoteCwd, ".beam", "pi-sessions", "session", "stale.txt"), "old\n");
+
+    const adapter = new PiAdapter();
+    const session = (await adapter.locate(cwd, home))!;
+    await adapter.install(t, session, remoteCwd);
+
+    expect(readdirSync(join(remoteCwd, ".beam", "pi-sessions"))).toEqual(["session.jsonl"]);
+  });
+});
+
+describe("pi-family install: `.beam` is never followed as a symlink", () => {
+  // A reused (--no-purge) workspace comes back with whatever the remote
+  // agent left in `.beam` — including `.beam` itself swapped for a symlink
+  // to a tree the agent wants beam to destroy or overwrite on its behalf.
+  function symlinkedBeamFixture(tool: "omp" | "pi") {
+    const home = fixtureHome();
+    const cwd = join(home, "w");
+    mkdirSync(cwd, { recursive: true });
+    const store = join(
+      home,
+      tool === "omp" ? join(".omp", "agent", "sessions", "-w") : join(".pi", "agent", "sessions", `-${cwd}-`.replaceAll("/", "-") + "-"),
+    );
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "2026-01-01T00-00-00-000Z_s1.jsonl"), OMP_HEADER(cwd));
+
+    // External sentinel tree laid out so the OLD direct `rm -rf`/write flow
+    // would have destroyed it through the link.
+    const sentinel = join(home, "sentinel");
+    mkdirSync(join(sentinel, "session"), { recursive: true });
+    mkdirSync(join(sentinel, "pi-sessions"), { recursive: true });
+    writeFileSync(join(sentinel, "session.jsonl"), "victim transcript\n");
+    writeFileSync(join(sentinel, "session", "victim.txt"), "victim artifacts\n");
+    writeFileSync(join(sentinel, "pi-sessions", "victim.jsonl"), "victim pi session\n");
+
+    const remoteCwd = join(home, "remote-ws");
+    mkdirSync(remoteCwd, { recursive: true });
+    symlinkSync(sentinel, join(remoteCwd, ".beam"));
+    return { home, cwd, sentinel, remoteCwd, t: new LocalTransport(home) };
+  }
+
+  function expectSentinelIntact(sentinel: string): void {
+    expect(readFileSync(join(sentinel, "session.jsonl"), "utf8")).toBe("victim transcript\n");
+    expect(readFileSync(join(sentinel, "session", "victim.txt"), "utf8")).toBe("victim artifacts\n");
+    expect(readFileSync(join(sentinel, "pi-sessions", "victim.jsonl"), "utf8")).toBe("victim pi session\n");
+    expect(readdirSync(sentinel).sort()).toEqual(["pi-sessions", "session", "session.jsonl"]);
+  }
+
+  test("omp install refuses a symlinked .beam and leaves the external tree unchanged", async () => {
+    const f = symlinkedBeamFixture("omp");
+    const adapter = new OmpAdapter();
+    const session = (await adapter.locate(f.cwd, f.home))!;
+
+    await expect(adapter.install(f.t, session, f.remoteCwd)).rejects.toThrow(/symlink/);
+
+    expectSentinelIntact(f.sentinel);
+    // The link itself is untouched, and the failed install cleaned its stage.
+    expect(lstatSync(join(f.remoteCwd, ".beam")).isSymbolicLink()).toBe(true);
+    expect(readdirSync(f.remoteCwd).filter((n) => n.startsWith(".beam-stage-"))).toEqual([]);
+  });
+
+  test("pi install refuses a symlinked .beam and leaves the external tree unchanged", async () => {
+    const f = symlinkedBeamFixture("pi");
+    const adapter = new PiAdapter();
+    const session = (await adapter.locate(f.cwd, f.home))!;
+
+    await expect(adapter.install(f.t, session, f.remoteCwd)).rejects.toThrow(/symlink/);
+
+    expectSentinelIntact(f.sentinel);
+    expect(lstatSync(join(f.remoteCwd, ".beam")).isSymbolicLink()).toBe(true);
+    expect(readdirSync(f.remoteCwd).filter((n) => n.startsWith(".beam-stage-"))).toEqual([]);
   });
 });
 

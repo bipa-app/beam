@@ -14,6 +14,8 @@ export interface SyncOptions {
   excludes?: string[];
   /** Mirror deletions (rsync --delete). */
   delete?: boolean;
+  /** Compare file contents, not only size and mtime (rsync --checksum). */
+  checksum?: boolean;
   /** Stream rsync output to the terminal. */
   verbose?: boolean;
 }
@@ -21,7 +23,13 @@ export interface SyncOptions {
 export interface Transport {
   /** Human-readable destination, e.g. "ssh sandbox" or "local (home=…)". */
   readonly label: string;
-  /** Run a command through `bash -lc` on the target. Never throws on nonzero exit. */
+  /**
+   * Run a shell command on the target. Never throws on a nonzero REMOTE
+   * exit — that comes back as `code`. MAY throw when the transport itself
+   * fails to deliver the command or to prove the remote exit status
+   * (see KubectlTransport's sentinel trailer), so an unreachable target is
+   * never mistaken for a command that ran and said "no".
+   */
   exec(command: string): Promise<ExecResult>;
   /** exec() that throws on nonzero exit and returns trimmed stdout. */
   execChecked(command: string): Promise<string>;

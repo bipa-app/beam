@@ -94,6 +94,8 @@ export class CodexAdapter implements SessionAdapter {
 
   async cleanupRemote(t: Transport, session: LocalSession, _remoteCwd: string): Promise<void> {
     const home = session.file.split("/.codex/")[0]!;
-    await t.exec(`rm -f ${shqRemotePath(this.remoteStorePath(session, home))}`);
+    // Checked: on persistent-home templates this store outlives the claim,
+    // so an unproven removal must fail the purge before the claim delete.
+    await t.execChecked(`rm -f ${shqRemotePath(this.remoteStorePath(session, home))}`);
   }
 }

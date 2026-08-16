@@ -35,6 +35,8 @@ export interface RunOptions {
   env?: Record<string, string>;
   /** Inherit the parent's stdio (interactive commands like `ssh -t`). */
   interactive?: boolean;
+  /** Feed this string to the child's stdin (non-interactive runs only). */
+  stdinText?: string;
 }
 
 /** Run an argv. Never throws on nonzero exit; inspect `code`. */
@@ -42,7 +44,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
   const proc = Bun.spawn(argv, {
     cwd: opts.cwd,
     env: opts.env ? { ...process.env, ...opts.env } : process.env,
-    stdin: opts.interactive ? "inherit" : "ignore",
+    stdin: opts.interactive ? "inherit" : opts.stdinText !== undefined ? Buffer.from(opts.stdinText) : "ignore",
     stdout: opts.interactive ? "inherit" : "pipe",
     stderr: opts.interactive ? "inherit" : "pipe",
   });

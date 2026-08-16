@@ -80,8 +80,12 @@ export class ClaudeAdapter implements SessionAdapter {
 
   async cleanupRemote(t: Transport, session: LocalSession, remoteCwd: string): Promise<void> {
     const dir = `~/.claude/projects/${claudeProjectSlug(remoteCwd)}`;
-    await t.exec(`rm -f ${shqRemotePath(`${dir}/${session.id}.jsonl`)}`);
-    // Drop the project dir too when ours was the only session in it.
-    await t.exec(`rmdir ${shqRemotePath(dir)} 2>/dev/null || true`);
+    // Checked: a trace that cannot be proven gone must fail the purge BEFORE
+    // the claim is deleted — on persistent-home templates the store outlives
+    // the sandbox, and a silent failure here would strand the transcript.
+    await t.execChecked(`rm -f ${shqRemotePath(`${dir}/${session.id}.jsonl`)}`);
+    // Drop the project dir too when ours was the only session in it (the
+    // `|| true` keeps a non-empty dir; transport failures still throw).
+    await t.execChecked(`rmdir ${shqRemotePath(dir)} 2>/dev/null || true`);
   }
 }

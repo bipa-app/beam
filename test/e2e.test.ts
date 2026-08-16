@@ -35,6 +35,9 @@ const FAKE_OMP = `#!/bin/bash
 file="$2"
 msg="\${3:-no-kickoff}"
 printf '{"type":"message","from":"remote-agent","text":"%s"}\\n' "$msg" >> "$file"
+# real omp writes a sibling artifacts dir next to the transcript
+mkdir -p "\${file%.jsonl}"
+echo "artifact-blob" > "\${file%.jsonl}/note.txt"
 echo "made-remotely" > remote-artifact.txt
 sleep 300
 `;
@@ -125,12 +128,14 @@ describe.skipIf(!HAVE_DEPS)("beam up/down round trip (local transport)", () => {
       expect(record.remoteCwd).toBe(remoteCwd);
 
       // The fake agent runs as a real external process in a tmux pane; fake
-      // timers cannot advance it, so poll the file it writes (bounded).
+      // timers cannot advance it, so poll for its LAST write (bounded) —
+      // once remote-artifact.txt exists, the transcript append and the
+      // artifacts dir are already on disk.
       const deadline = Date.now() + 10_000;
       let transcript = "";
       while (Date.now() < deadline) {
         transcript = readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8");
-        if (transcript.includes("remote-agent")) break;
+        if (transcript.includes("remote-agent") && existsSync(join(remoteCwd, "remote-artifact.txt"))) break;
         await Bun.sleep(200);
       }
       expect(transcript).toContain('"from":"remote-agent"');
@@ -154,6 +159,12 @@ describe.skipIf(!HAVE_DEPS)("beam up/down round trip (local transport)", () => {
       expect(store).toContain('"from":"remote-agent"');
       expect(store).toContain("local work so far");
 
+      // the remote-created artifacts dir (none existed locally before the
+      // handoff) was imported next to the store file — resolvable after the
+      // remote purge below
+      const artifactsDir = join(localHome, ".omp", "agent", "sessions", "-work-app", "2026-08-09T10-00-00-000Z_e2e-session");
+      expect(readFileSync(join(artifactsDir, "note.txt"), "utf8")).toBe("artifact-blob\n");
+
       // previous transcript backed up
       const backups = readdirSync(join(localHome, ".omp", "agent", "sessions", "-work-app")).filter(
         (n) => n.includes(".bak-"),
@@ -173,7 +184,10 @@ describe.skipIf(!HAVE_DEPS)("beam up/down round trip (local transport)", () => {
     30_000,
   );
 
-  test("down without a session round trip fails loudly, not silently", async () => {
-    expect(existsSync(join(workDir, ".beam", "session.jsonl"))).toBe(true);
+  test("beam-reserved scratch never lands in the local workspace — the transcript lives in the store", () => {
+    // The grown transcript was fetched over the transport's file channel and
+    // re-imported into ~/.omp; the filtered mirror never carries `.beam`, so
+    // no stale scratch is left behind to shadow a future handoff's state.
+    expect(existsSync(join(workDir, ".beam"))).toBe(false);
   });
 });

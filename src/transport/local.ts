@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { run, runChecked } from "../util/shell.ts";
@@ -47,6 +47,7 @@ export class LocalTransport implements Transport {
       "rsync",
       ...this.rsyncFlags,
       ...(opts.delete ? ["--delete"] : []),
+      ...(opts.checksum ? ["--checksum"] : []),
       ...(opts.excludes ?? []).map((e) => `--exclude=${e}`),
       source,
       dest,
@@ -54,15 +55,31 @@ export class LocalTransport implements Transport {
     await runChecked(argv, { interactive: opts.verbose === true });
   }
 
+  /**
+   * No-follow guard mirroring the remote transports: rsync's trailing-slash
+   * form writes through (or reads through) a symlinked final component, so
+   * a workspace path swapped for a symlink refuses here. Commands prove
+   * full physical containment under the configured root separately
+   * (workspace.ts); this guards the transfer's own destination/source hop.
+   */
+  private assertNoFollowSyncRoot(dir: string): void {
+    if (lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error(`[${this.label}] refusing to sync through symlinked path: ${dir}`);
+    }
+  }
+
   async syncUp(localDir: string, remoteDir: string, opts: SyncOptions = {}): Promise<void> {
     const dest = this.resolve(remoteDir);
+    this.assertNoFollowSyncRoot(dest);
     mkdirSync(dest, { recursive: true });
     await this.rsync(localDir.replace(/\/*$/, "/"), dest.replace(/\/*$/, "/"), opts);
   }
 
   async syncDown(remoteDir: string, localDir: string, opts: SyncOptions = {}): Promise<void> {
+    const src = this.resolve(remoteDir);
+    this.assertNoFollowSyncRoot(src);
     mkdirSync(localDir, { recursive: true });
-    await this.rsync(this.resolve(remoteDir).replace(/\/*$/, "/"), localDir.replace(/\/*$/, "/"), opts);
+    await this.rsync(src.replace(/\/*$/, "/"), localDir.replace(/\/*$/, "/"), opts);
   }
 
   async sendFile(localPath: string, remotePath: string): Promise<void> {
@@ -80,7 +97,15 @@ export class LocalTransport implements Transport {
     return existsSync(this.resolve(remotePath));
   }
 
+  /**
+   * Argv for an interactive command on the target. `env HOME=...` pins the
+   * isolated home exactly like `exec` does, so an interactive login writes
+   * harness auth into the target home, never the caller's. argv is spawned
+   * without a shell, so the assignment needs no quoting — spaces and shell
+   * metacharacters in `home` survive verbatim — and `command` stays a
+   * single untouched argument to `bash -lc` (same tty semantics as before).
+   */
   interactiveArgv(command: string): string[] {
-    return ["bash", "-lc", command];
+    return ["env", `HOME=${this.home}`, "bash", "-lc", command];
   }
 }

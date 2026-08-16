@@ -1,16 +1,21 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
+  closeSync,
   copyFileSync,
   existsSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import { runChecked } from "../util/shell.ts";
+import { basename, dirname, join } from "node:path";
+import { shq, shqRemotePath } from "../util/shell.ts";
+import { noFollowReservedDirScript } from "../workspace.ts";
 import type { Transport } from "../transport/types.ts";
 import type { InstalledSession, LocalSession, SessionAdapter, ToolName } from "./types.ts";
 
@@ -28,10 +33,20 @@ import type { InstalledSession, LocalSession, SessionAdapter, ToolName } from ".
  *     --continue, which deterministically picks it),
  *  - the local resume hint printed after `beam down`.
  *
- * Both ship the session INSIDE the workspace under .beam/, so the growing
- * transcript rides the normal workspace rsync back on `beam down`. The header
- * cwd is rewritten to the destination on install (no re-root prompts) and
- * restored on collect, with the previous local copy backed up.
+ * Both install the session INSIDE the workspace under `.beam/` so the remote
+ * harness can resume it in place — but `.beam` is beam-reserved and NEVER
+ * rides the filtered workspace mirror (see gatherExcludes): the transcript
+ * and artifacts travel over explicit per-path transfers (sendFile/fetchFile
+ * and dedicated artifact syncs) that no user exclude can suppress. Because
+ * the mirror leaves `.beam` alone, a reused (--no-purge) workspace comes
+ * back with whatever the remote agent left there — so install() never
+ * writes or deletes THROUGH an unproven `.beam`: it stages at an
+ * unpredictable path under the already-proven workspace and commits in one
+ * remote shell that first proves `.beam` is a real directory. The header
+ * cwd is rewritten to the destination on install (no re-root prompts);
+ * collect() fetches the grown transcript straight off the target, proves
+ * it belongs to this handoff, and restores the header, backing up the
+ * previous local copy.
  */
 
 export const OMP_WORKSPACE_SESSION = ".beam/session.jsonl";
@@ -47,10 +62,16 @@ interface PiFamilySpec {
   remoteAuthProbe?: string;
   /** Store root segments under the home directory. */
   storeSegments: string[];
-  /** Fast-path store directory names for a cwd; a header-cwd scan backs them up. */
+  /** Untrusted fast-path store dir names for a cwd: slugs collide, so every file inside still validates its header cwd. */
   dirCandidates(cwd: string, home: string): string[];
   /** Where the session ships inside the workspace. */
   workspaceSession: string;
+  /**
+   * Beam-private remote dir wiped wholesale on install (pi's --continue
+   * demands exactly one session in it). Absent: only the transcript and
+   * artifacts paths are reset.
+   */
+  privateSessionDir?: string;
   /** Command that resumes the shipped session from the remote workspace. */
   resumeArgv(kickoff?: string): string[];
   /** How the user continues locally after `beam down`. */
@@ -66,6 +87,8 @@ const OMP_SPEC: PiFamilySpec = {
   dirCandidates(cwd, home) {
     const candidates: string[] = [];
     if (cwd.startsWith(home)) candidates.push(cwd.slice(home.length).replaceAll("/", "-"));
+    // Current OMP builds use pi's wrapped absolute-cwd slug outside $HOME.
+    candidates.push(`-${cwd}-`.replaceAll("/", "-") + "-");
     const sha = createHash("sha256").update(cwd).digest("hex");
     const base = basename(cwd);
     for (const scope of ["home", "abs", "tmp"]) candidates.push(`${scope}-${base}-${sha}`);
@@ -89,9 +112,10 @@ const PI_SPEC: PiFamilySpec = {
   remoteAuthProbe: 'test -s "$HOME/.pi/agent/auth.json"',
   dirCandidates(cwd) {
     // /a/b -> --a-b-- : the cwd wrapped in dashes with `/` -> `-`.
-    return [`-${cwd}-`.replaceAll("/", "-")];
+    return [`-${cwd}-`.replaceAll("/", "-") + "-"];
   },
   workspaceSession: PI_WORKSPACE_SESSION,
+  privateSessionDir: PI_WORKSPACE_SESSION_DIR,
   resumeArgv(kickoff) {
     // pi --resume is an interactive picker; --continue inside a private
     // session dir holding exactly one transcript is deterministic.
@@ -129,14 +153,8 @@ export function rewriteSessionHeaderCwd(jsonl: string, newCwd: string): string {
   throw new Error("session header (type=session) not found in transcript");
 }
 
-/** Read the cwd out of a session file's header, if present near the top. */
-function readHeaderCwd(file: string): string | undefined {
-  let text: string;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch {
-    return undefined;
-  }
+/** Read the cwd out of a session header near the top of a transcript. */
+function headerCwdOfText(text: string): string | undefined {
   for (const line of text.split("\n", 20)) {
     if (!line.includes('"type":"session"')) continue;
     try {
@@ -149,15 +167,81 @@ function readHeaderCwd(file: string): string | undefined {
   return undefined;
 }
 
-function newestSessionIn(dir: string, sessionRef?: string): { file: string; mtime: number } | undefined {
+/**
+ * Read the cwd out of a session file's header, if present near the top.
+ * Only the leading bytes are read: locate inspects EVERY candidate file and
+ * transcripts grow large, while the header is always within the first lines.
+ */
+const HEADER_SCAN_BYTES = 64 * 1024;
+
+function readHeaderCwd(file: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    const buf = Buffer.alloc(HEADER_SCAN_BYTES);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return headerCwdOfText(buf.toString("utf8", 0, n));
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * macOS aliases /tmp, /var and /etc into /private/* at the filesystem root,
+ * so a session may record either spelling of the same workspace. The lexical
+ * mapping covers recorded cwds that no longer exist on disk; realpath covers
+ * live paths and any other physical alias (symlinked components).
+ */
+function lexicalCwd(p: string): string {
+  for (const alias of ["/tmp", "/var", "/etc"]) {
+    if (p === alias || p.startsWith(`${alias}/`)) return `/private${p}`;
+  }
+  return p;
+}
+
+function physicalCwd(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return lexicalCwd(p);
+  }
+}
+
+/**
+ * Newest session in `dir` whose recorded header cwd names `cwd`'s workspace
+ * (by path or physical alias). Slug-derived dir names collide (`/a/b` and
+ * `/a-b` share one slug) and a store dir can hold foreign or corrupt
+ * transcripts, so no file is trusted by location alone: a newest-but-foreign
+ * or newest-but-corrupt file is skipped, never shipped, and an older valid
+ * session still wins.
+ */
+function newestSessionIn(
+  dir: string,
+  cwd: string,
+  sessionRef?: string,
+): { file: string; mtime: number } | undefined {
   if (!existsSync(dir)) return undefined;
+  const cwdPhysical = physicalCwd(cwd);
+  const cwdLexical = lexicalCwd(cwd);
   let best: { file: string; mtime: number } | undefined;
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".jsonl")) continue;
     if (sessionRef && !name.includes(sessionRef)) continue;
     const file = join(dir, name);
     const mtime = statSync(file).mtimeMs;
-    if (!best || mtime > best.mtime) best = { file, mtime };
+    if (best && mtime <= best.mtime) continue;
+    const headerCwd = readHeaderCwd(file);
+    if (headerCwd === undefined) continue;
+    if (
+      headerCwd !== cwd &&
+      physicalCwd(headerCwd) !== cwdPhysical &&
+      lexicalCwd(headerCwd) !== cwdLexical
+    ) {
+      continue;
+    }
+    best = { file, mtime };
   }
   return best;
 }
@@ -179,20 +263,24 @@ export class PiFamilyAdapter implements SessionAdapter {
     const root = join(home, ...this.spec.storeSegments);
     if (!existsSync(root)) return undefined;
 
+    // Slug-derived dir names are hints, never proof: distinct cwds can share
+    // a slug, so every candidate file must validate its recorded header cwd.
     let best: { file: string; mtime: number } | undefined;
+    const tried = new Set<string>();
     for (const name of this.spec.dirCandidates(cwd, home)) {
-      const found = newestSessionIn(join(root, name), sessionRef);
+      tried.add(name);
+      const found = newestSessionIn(join(root, name), cwd, sessionRef);
       if (found && (!best || found.mtime > best.mtime)) best = found;
     }
 
-    // Fallback: scan every store dir and match by recorded header cwd.
+    // Fallback: scan every store dir for a header-cwd match.
     if (!best) {
       for (const name of readdirSync(root)) {
+        if (tried.has(name)) continue;
         const dir = join(root, name);
         if (!statSync(dir).isDirectory()) continue;
-        const found = newestSessionIn(dir, sessionRef);
-        if (!found || (best && found.mtime <= best.mtime)) continue;
-        if (readHeaderCwd(found.file) === cwd) best = found;
+        const found = newestSessionIn(dir, cwd, sessionRef);
+        if (found && (!best || found.mtime > best.mtime)) best = found;
       }
     }
     if (!best) return undefined;
@@ -218,35 +306,105 @@ export class PiFamilyAdapter implements SessionAdapter {
     const rewritten = rewriteSessionHeaderCwd(readFileSync(session.file, "utf8"), remoteCwd);
     const tmp = join(mkdtempSync(join(tmpdir(), "beam-")), "session.jsonl");
     writeFileSync(tmp, rewritten);
-    await t.sendFile(tmp, `${remoteCwd}/${this.spec.workspaceSession}`);
-    const notes = [`session -> ${this.spec.workspaceSession} (header cwd rewritten)`];
-    if (session.artifactsDir) {
-      const artifactsDest = this.spec.workspaceSession.slice(0, -".jsonl".length);
-      await t.syncUp(session.artifactsDir, `${remoteCwd}/${artifactsDest}`);
-      notes.push(`artifacts -> ${artifactsDest}/`);
+    // The beam-reserved session area must be reset before shipping: a reused
+    // workspace (--no-purge) may still hold a previous handoff's transcript,
+    // artifacts, or extra pi sessions — which collect() would import as if
+    // this agent produced them, and which break pi's exactly-one-session
+    // --continue. But `.beam` itself is remote-agent territory between
+    // handoffs: it can have been swapped for a symlink so that every reset
+    // or write through it lands OUTSIDE the workspace. So nothing here ever
+    // operates through an unproven `.beam`: the transcript and artifacts
+    // stage at an unpredictable sibling path directly under the workspace
+    // (whose containment the up flow re-proves immediately before install),
+    // then ONE remote shell proves `.beam` is a real directory, resets only
+    // the adapter-owned paths, and moves the staged data into place — the
+    // tightest check-to-use window a shell transport offers.
+    const artifactsDest = this.spec.workspaceSession.slice(0, -".jsonl".length);
+    const resetPaths = this.spec.privateSessionDir
+      ? [this.spec.privateSessionDir]
+      : [this.spec.workspaceSession, artifactsDest];
+    const stage = `${remoteCwd}/.beam-stage-${randomBytes(9).toString("hex")}`;
+    const stageQ = shqRemotePath(stage);
+    try {
+      await t.sendFile(tmp, `${stage}/session.jsonl`);
+      if (session.artifactsDir) await t.syncUp(session.artifactsDir, `${stage}/artifacts`);
+      const commit = [
+        "set -u",
+        noFollowReservedDirScript(remoteCwd),
+        // `rm` never follows a symlink given AS an argument, and `.beam` —
+        // the only intermediate component — was just proven a real dir, so
+        // the reset cannot reach outside the workspace.
+        `rm -rf -- ${resetPaths.map((p) => shqRemotePath(`${remoteCwd}/${p}`)).join(" ")} || { echo ${shq("beam: failed to reset the reserved session area")} >&2; exit 65; }`,
+        ...(this.spec.privateSessionDir
+          ? [
+              `mkdir -p -- ${shqRemotePath(`${remoteCwd}/${this.spec.privateSessionDir}`)} || { echo ${shq("beam: failed to create the private session dir")} >&2; exit 66; }`,
+            ]
+          : []),
+        `mv -- ${shqRemotePath(`${stage}/session.jsonl`)} ${shqRemotePath(`${remoteCwd}/${this.spec.workspaceSession}`)} || { echo ${shq("beam: failed to install the session transcript")} >&2; exit 67; }`,
+        ...(session.artifactsDir
+          ? [
+              `mv -- ${shqRemotePath(`${stage}/artifacts`)} ${shqRemotePath(`${remoteCwd}/${artifactsDest}`)} || { echo ${shq("beam: failed to install the session artifacts")} >&2; exit 67; }`,
+            ]
+          : []),
+        `rm -rf -- ${stageQ}`,
+      ].join("\n");
+      await t.execChecked(commit);
+    } catch (err) {
+      // Best-effort stage cleanup: the stage is a SIBLING of `.beam`, never
+      // under it, and `rm` does not follow its final component.
+      await t.exec(`rm -rf -- ${stageQ}`);
+      throw err;
     }
+    const notes = [`session -> ${this.spec.workspaceSession} (header cwd rewritten)`];
+    if (session.artifactsDir) notes.push(`artifacts -> ${artifactsDest}/`);
     return { resumeArgv: this.spec.resumeArgv(kickoff), notes };
   }
 
   async collect(
-    _t: Transport,
+    t: Transport,
     session: LocalSession,
     localCwd: string,
-    _remoteCwd: string,
+    remoteCwd: string,
   ): Promise<string> {
-    const grown = join(localCwd, this.spec.workspaceSession);
-    if (!existsSync(grown)) {
+    // Fetch the grown transcript straight off the target — NEVER from the
+    // local workspace mirror. `.beam` is excluded from the filtered mirror
+    // (see gatherExcludes), and a pre-existing local `.beam/session.jsonl`
+    // is stale scratch from an earlier handoff, not returned state.
+    const remoteSession = `${remoteCwd}/${this.spec.workspaceSession}`;
+    if (!(await t.exists(remoteSession))) {
       throw new Error(
-        `${this.spec.workspaceSession} missing after sync — was the workspace shipped with a session?`,
+        `remote session ${remoteSession} not found — was the workspace shipped with a session?`,
+      );
+    }
+    const tmp = join(mkdtempSync(join(tmpdir(), "beam-")), "session.jsonl");
+    await t.fetchFile(remoteSession, tmp);
+    const grown = readFileSync(tmp, "utf8");
+    // Bind the transcript to this handoff before touching the local store:
+    // install() rewrote the header cwd to this remote workspace, so anything
+    // else is a foreign or corrupt transcript — refuse, do not import.
+    const headerCwd = headerCwdOfText(grown);
+    if (headerCwd !== remoteCwd) {
+      throw new Error(
+        `remote transcript ${remoteSession} records cwd ${headerCwd ?? "(none)"}, not this ` +
+          `handoff's workspace ${remoteCwd} — refusing to import a foreign session`,
       );
     }
     const backup = `${session.file}.bak-${Date.now()}`;
     if (existsSync(session.file)) copyFileSync(session.file, backup);
-    writeFileSync(session.file, rewriteSessionHeaderCwd(readFileSync(grown, "utf8"), localCwd));
+    writeFileSync(session.file, rewriteSessionHeaderCwd(grown, localCwd));
 
-    const grownArtifacts = join(localCwd, this.spec.workspaceSession.slice(0, -".jsonl".length));
-    if (existsSync(grownArtifacts) && session.artifactsDir) {
-      await runChecked(["rsync", "-a", grownArtifacts + "/", session.artifactsDir + "/"]);
+    // The remote agent may have CREATED artifacts even when none existed
+    // locally at locate time (the harness writes a sibling dir next to the
+    // transcript). Always derive the store-side destination from the store
+    // file so the pair stays resolvable after the remote purge.
+    const remoteArtifacts = `${remoteCwd}/${this.spec.workspaceSession.slice(0, -".jsonl".length)}`;
+    if (await t.exists(remoteArtifacts)) {
+      const localArtifacts =
+        session.artifactsDir ?? join(dirname(session.file), basename(session.file, ".jsonl"));
+      // Additive on purpose: a mirrored (delete) return is licensed per
+      // transfer root on some transports, and a dir the REMOTE agent created
+      // was never syncUp'd from here.
+      await t.syncDown(remoteArtifacts, localArtifacts);
     }
     return this.spec.localResumeHint(session.file, localCwd);
   }

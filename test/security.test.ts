@@ -62,24 +62,70 @@ describe("privilege probes", () => {
     expect(report.warnings[0]).toMatch(/passwordless sudo/);
   });
 
-  test("workspace root outside the user's home is flagged", async () => {
+  test("workspace root outside the user's home is flagged when tenancy is unprovable", async () => {
     const t = new CannedTransport({
       whoami: { ...ok, stdout: "beam-agent\n" },
       "sudo -n true": { code: 1, stdout: "", stderr: "" },
       "$HOME": { ...ok, stdout: "/home/beam-agent" },
+      // no passwd response: the probe fails, so beam assumes a shared box
     });
     const report = await probePrivilege(t, "/srv/shared/beam");
     expect(report.warnings.length).toBe(1);
     expect(report.warnings[0]).toMatch(/outside the target user's home/);
   });
 
+  test("an observably single-tenant box suppresses the outside-home warning", async () => {
+    const t = new CannedTransport({
+      whoami: { ...ok, stdout: "agent\n" },
+      "sudo -n true": { code: 1, stdout: "", stderr: "" },
+      "$HOME": { ...ok, stdout: "/home/agent" },
+      passwd: { ...ok, stdout: "root:x:0:0::/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/bash\n" },
+    });
+    const report = await probePrivilege(t, "/data/bipa/ws");
+    expect(report.warnings).toEqual([]);
+  });
+
+  test("a second human user makes the box shared — outside-home warning stays", async () => {
+    const t = new CannedTransport({
+      whoami: { ...ok, stdout: "agent\n" },
+      "sudo -n true": { code: 1, stdout: "", stderr: "" },
+      "$HOME": { ...ok, stdout: "/home/agent" },
+      passwd: {
+        ...ok,
+        stdout:
+          "root:x:0:0::/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/bash\nother:x:1001:1001::/home/other:/bin/bash\n",
+      },
+    });
+    const report = await probePrivilege(t, "/data/bipa/ws");
+    expect(report.warnings.length).toBe(1);
+    expect(report.warnings[0]).toMatch(/outside the target user's home/);
+  });
+
+  test("a mounted ServiceAccount token and Docker socket are flagged", async () => {
+    const t = new CannedTransport({
+      whoami: { ...ok, stdout: "agent\n" },
+      "sudo -n true": { code: 1, stdout: "", stderr: "" },
+      "$HOME": { ...ok, stdout: "/home/agent" },
+      "serviceaccount/token": ok,
+      "docker.sock": ok,
+    });
+    const report = await probePrivilege(t, "/home/agent/beam/ws");
+    expect(report.warnings.length).toBe(2);
+    expect(report.warnings.some((w) => w.includes("ServiceAccount token"))).toBe(true);
+    expect(report.warnings.some((w) => w.includes("docker.sock"))).toBe(true);
+  });
+
   test("a hardened posture over a real shell yields no warnings", async () => {
     const home = mkdtempSync(join(tmpdir(), "beam-sec-"));
     // Real bash via LocalTransport: whoami is the CI user (never root in CI),
-    // HOME is overridden to the fixture, and the root sits under it.
+    // HOME is overridden to the fixture, and the root sits under it. sudo, a
+    // host Docker socket, or a mounted SA token are properties of the machine
+    // running the tests, not of the fixture posture under test — filter them.
     const report = await probePrivilege(new LocalTransport(home), join(home, "beam", "ws"));
-    const nonSudo = report.warnings.filter((w) => !w.includes("sudo"));
+    const relevant = report.warnings.filter(
+      (w) => !w.includes("sudo") && !w.includes("docker.sock") && !w.includes("ServiceAccount"),
+    );
     expect(report.user).not.toBe("");
-    expect(nonSudo).toEqual([]);
+    expect(relevant).toEqual([]);
   });
 });

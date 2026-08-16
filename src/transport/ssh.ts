@@ -1,5 +1,6 @@
 import { dirname } from "node:path";
 import { run, runChecked, shq, shqRemotePath } from "../util/shell.ts";
+import { noFollowSyncRootGuard } from "../workspace.ts";
 import type { ExecResult, SyncOptions, Transport } from "./types.ts";
 
 const DEFAULT_RSYNC_FLAGS = ["-a", "-z"];
@@ -42,6 +43,7 @@ export class SshTransport implements Transport {
       "rsync",
       ...this.rsyncFlags,
       ...(opts.delete ? ["--delete"] : []),
+      ...(opts.checksum ? ["--checksum"] : []),
       ...(opts.excludes ?? []).map((e) => `--exclude=${e}`),
       source,
       dest,
@@ -50,11 +52,20 @@ export class SshTransport implements Transport {
   }
 
   async syncUp(localDir: string, remoteDir: string, opts: SyncOptions = {}): Promise<void> {
-    await this.execChecked(`mkdir -p ${shqRemotePath(remoteDir)}`);
+    // No-follow guard in the same remote shell as the mkdir: rsync's
+    // trailing-slash destination writes THROUGH a symlinked final component,
+    // so a swapped workspace path must refuse before the transfer starts.
+    // Commands prove full physical containment separately (workspace.ts);
+    // this keeps the guard adjacent to the transfer itself.
+    await this.execChecked(`${noFollowSyncRootGuard(remoteDir)}\nmkdir -p ${shqRemotePath(remoteDir)}`);
     await this.rsync(localDir.replace(/\/*$/, "/"), `${this.host}:${this.remoteArg(remoteDir)}/`, opts);
   }
 
   async syncDown(remoteDir: string, localDir: string, opts: SyncOptions = {}): Promise<void> {
+    // Same guard on the source: never read a workspace through a symlink a
+    // swap left at its path — the mirror must collect the exact directory
+    // the record proved contained.
+    await this.execChecked(noFollowSyncRootGuard(remoteDir));
     await runChecked(["mkdir", "-p", localDir]);
     await this.rsync(`${this.host}:${this.remoteArg(remoteDir)}/`, localDir.replace(/\/*$/, "/"), opts);
   }
@@ -70,8 +81,19 @@ export class SshTransport implements Transport {
   }
 
   async exists(remotePath: string): Promise<boolean> {
-    const res = await this.exec(`test -e ${shqRemotePath(remotePath)}`);
-    return res.code === 0;
+    const probe = `test -e ${shqRemotePath(remotePath)}`;
+    const res = await this.exec(probe);
+    if (res.code === 0) return true;
+    if (res.code === 1) return false;
+    // ssh reserves 255 for its own failures (DNS, auth, a dropped
+    // connection), and `test` exits >1 on usage errors — neither is a remote
+    // "no". Absence answers authorize skipping collection steps and, further
+    // up, purging, so anything but a clean yes/no is an outage that must
+    // abort the caller instead of masquerading as an absent file.
+    const detail = (res.stderr || res.stdout).trim();
+    throw new Error(
+      `[${this.label}] existence probe did not answer (${res.code}): ${probe}${detail ? `\n${detail}` : ""}`,
+    );
   }
 
   interactiveArgv(command: string): string[] {

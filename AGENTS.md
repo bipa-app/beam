@@ -6,18 +6,26 @@ changes. These rules are mandatory for all contributions, human or agent.
 
 ## Architecture in one breath
 
-Three seams, all small interfaces — extend by implementing, never by widening
+Four seams, all small interfaces — extend by implementing, never by widening
 callers:
 
 - `src/session/` — **SessionAdapter**: locate a harness session for a cwd,
   install it on a target, produce the resume command, collect the grown
   transcript back. One adapter per harness.
+- `src/provider/` — **SandboxProvider**: the lifecycle above a transport —
+  provision/connect/destroy yielding a Transport. ssh/local are the trivial
+  `StaticProvider`; `agent-sandbox` owns one SandboxClaim per handoff record
+  (created if absent, pod re-resolved from the claim on every command,
+  deleted only on the successful purge path).
 - `src/transport/` — **Transport**: exec via `bash -lc`, sync up/down,
-  send/fetch file. `ssh` is the production remote; `local` is the hermetic
-  test double and must stay behaviorally equivalent (same `~/` semantics).
+  send/fetch file. `ssh` is the production remote; `kubectl` reaches an
+  Agent Sandbox pod (tar streams over exec, every argv pins
+  context/namespace/kubeconfig); `local` is the hermetic test double and
+  must stay behaviorally equivalent (same `~/` semantics).
 - `src/runtime/` — where the remote agent process lives (tmux).
 
-Commands (`src/commands/`) orchestrate the seams and own the handoff record
+Commands (`src/commands/`) orchestrate the seams through the provider — no
+target-type branching outside the seams — and own the handoff record
 lifecycle (`up → down/killed`) in `src/state.ts`.
 
 ## Commands

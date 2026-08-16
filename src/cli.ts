@@ -9,6 +9,8 @@ import {
   cmdLs,
   cmdStatus,
   cmdTargets,
+  KILL_HELP,
+  LOGIN_HELP,
 } from "./commands/misc.ts";
 import { cmdUp, UP_HELP } from "./commands/up.ts";
 
@@ -18,7 +20,7 @@ usage: beam <command> [args]
 
   init              write a sample config (~/.beam/config.json)
   targets           list configured targets
-  doctor [target]   verify ssh/rsync/tmux/harness on a target
+  doctor [target]   verify a target: transport, tools, harnesses, credential posture
   login [target]    interactive harness login on a target (never copies credentials)
   up                ship workspace + session, resume the agent remotely
   ls                list handoffs
@@ -27,7 +29,7 @@ usage: beam <command> [args]
   down [id]         stop remote agent, sync back, re-import session
   kill [id]         kill the remote agent (--purge deletes the workspace)
 
-run \`beam up --help\` / \`beam down --help\` for command options.
+run \`beam <command> --help\` (up, down, kill, login) for command options.
 
 supported harnesses: omp, pi, Claude Code (claude), Codex (codex)
 `;
@@ -63,6 +65,8 @@ async function main(): Promise<void> {
       console.log(HELP);
       if (rest[0] === "up") console.log(UP_HELP);
       if (rest[0] === "down") console.log(DOWN_HELP);
+      if (rest[0] === "kill") console.log(KILL_HELP);
+      if (rest[0] === "login") console.log(LOGIN_HELP);
       return;
     default:
       console.error(`unknown command "${command}"\n`);
