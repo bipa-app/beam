@@ -1,3 +1,14 @@
+/**
+ * Goal: the shell seam's safety contracts — `shq`/`shjoin`/`shqRemotePath`
+ * survive hostile content through a real bash, `run` enforces its per-stream
+ * output cap loudly (no deadlock, no unbounded buffering), and TmuxRuntime
+ * maps has-session/kill-session exits to alive/absent, failing closed on
+ * anything it cannot classify.
+ *
+ * Method: quoting round-trips execute through real `bash -c`; cap behavior
+ * uses exact-size and overflowing writers; tmux verdicts run against a
+ * scripted Transport double returning canned exit codes and stderr.
+ */
 import { describe, expect, test } from "bun:test";
 import { TmuxRuntime } from "../src/runtime/tmux.ts";
 import type { Transport } from "../src/transport/types.ts";
@@ -27,6 +38,74 @@ describe("shell quoting", () => {
   test("shqRemotePath quotes absolute paths verbatim", async () => {
     const res = await run(["bash", "-c", `printf %s ${shqRemotePath("/a b/c'd")}`]);
     expect(res.stdout).toBe("/a b/c'd");
+  });
+});
+
+describe("run output bounds", () => {
+  const CAP = 8192;
+
+  test("captures exactly cap-1 and cap bytes without failing", async () => {
+    for (const bytes of [CAP - 1, CAP]) {
+      const res = await run(["head", "-c", String(bytes), "/dev/zero"], { maxOutputBytes: CAP });
+      expect(res.code).toBe(0);
+      expect(res.stdout.length).toBe(bytes);
+      expect(res.stderr).toBe("");
+    }
+  });
+
+  test("cap+1 stdout bytes fail loudly with command, stream, and cap", async () => {
+    await expect(
+      run(["head", "-c", String(CAP + 1), "/dev/zero"], { maxOutputBytes: CAP }),
+    ).rejects.toThrow(`exceeded the ${CAP}-byte per-stream cap on stdout: head`);
+  });
+
+  test("cap+1 stderr bytes fail loudly naming stderr", async () => {
+    const script = `head -c ${CAP + 1} /dev/zero >&2`;
+    await expect(run(["bash", "-c", script], { maxOutputBytes: CAP })).rejects.toThrow(
+      `exceeded the ${CAP}-byte per-stream cap on stderr: bash`,
+    );
+  });
+
+  test("stdout and stderr each get the full cap — the bound is per stream", async () => {
+    const script = `head -c ${CAP} /dev/zero; head -c ${CAP} /dev/zero >&2`;
+    const res = await run(["bash", "-c", script], { maxOutputBytes: CAP });
+    expect(res.code).toBe(0);
+    expect(res.stdout.length).toBe(CAP);
+    expect(res.stderr.length).toBe(CAP);
+  });
+
+  test("simultaneous large stdout+stderr drains without pipe deadlock", async () => {
+    // 1 MiB per stream — far past the OS pipe buffer on both streams at
+    // once, which deadlocks any run() that awaits exit before draining.
+    const bytes = 1_048_576;
+    const script = `head -c ${bytes} /dev/zero & head -c ${bytes} /dev/zero >&2; wait`;
+    const res = await run(["bash", "-c", script]);
+    expect(res.code).toBe(0);
+    expect(res.stdout.length).toBe(bytes);
+    expect(res.stderr.length).toBe(bytes);
+  });
+
+  test("a hostile infinite writer is killed at the cap, not buffered", async () => {
+    await expect(run(["yes"], { maxOutputBytes: CAP })).rejects.toThrow(
+      `exceeded the ${CAP}-byte per-stream cap on stdout: yes`,
+    );
+  });
+
+  test("both streams overflowing together rejects without hanging", async () => {
+    const script = `head -c ${CAP * 4} /dev/zero & head -c ${CAP * 4} /dev/zero >&2; wait`;
+    await expect(run(["bash", "-c", script], { maxOutputBytes: CAP })).rejects.toThrow(
+      "per-stream cap on",
+    );
+  });
+
+  test("rejects a non-positive or non-integer cap before spawning", async () => {
+    await expect(run(["true"], { maxOutputBytes: 0 })).rejects.toThrow("positive integer");
+    await expect(run(["true"], { maxOutputBytes: 1.5 })).rejects.toThrow("positive integer");
+  });
+
+  test("nonzero exit still returns code with both captured streams", async () => {
+    const res = await run(["bash", "-c", "echo out; echo err >&2; exit 3"]);
+    expect(res).toEqual({ code: 3, stdout: "out\n", stderr: "err\n" });
   });
 });
 
@@ -88,13 +167,28 @@ describe("tmux runtime", () => {
     expect(await new TmuxRuntime(one.transport).alive("s")).toBe(false);
   });
 
-  test.each([127, 255])("alive: exit %i is unknown liveness and throws, not 'absent'", async (code) => {
+  test.each([127, 255])("alive: exit %i is unknown liveness and throws," +
+    " not 'absent'", async (code) => {
     const { transport, calls } = scripted([{ match: "has-session", code, stderr: "boom" }]);
     await expect(new TmuxRuntime(transport).alive("s")).rejects.toThrow(
       `cannot determine whether tmux session s is alive (has-session exited ${code}): boom`,
     );
     expect(calls).toEqual([expect.stringContaining("has-session")]);
   });
+  test("alive: exit 1 with a non-absence diagnostic is unknown and fails closed", async () => {
+    const { transport, calls } = scripted([
+      {
+        match: "has-session",
+        code: 1,
+        stderr: "error connecting to /tmp/tmux.sock (Permission denied)",
+      },
+    ]);
+    await expect(new TmuxRuntime(transport).alive("s")).rejects.toThrow(
+      /cannot determine.*Permission denied/,
+    );
+    expect(calls).toEqual([expect.stringContaining("has-session")]);
+  });
+
 
   test("kill: a clean kill-session is one call and no re-probe", async () => {
     const { transport, calls } = scripted([{ match: "kill-session", code: 0 }]);
@@ -105,7 +199,7 @@ describe("tmux runtime", () => {
   test("kill: a failed kill of a separately-verified absent session is idempotent", async () => {
     const { transport, calls } = scripted([
       { match: "kill-session", code: 1, stderr: "can't find session: =s" },
-      { match: "has-session", code: 1 },
+      { match: "has-session", code: 1, stderr: "can't find session: =s" },
     ]);
     await new TmuxRuntime(transport).kill("s");
     expect(calls).toHaveLength(2);
@@ -143,7 +237,7 @@ describe("tmux runtime", () => {
   test("interrupt: losing the race to an agent that already exited is tolerated", async () => {
     const { transport, calls } = scripted([
       { match: "send-keys", code: 1, stderr: "can't find pane" },
-      { match: "has-session", code: 1 },
+      { match: "has-session", code: 1, stderr: "can't find session: =s" },
     ]);
     await new TmuxRuntime(transport).interrupt("s");
     expect(calls).toHaveLength(2);

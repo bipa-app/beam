@@ -1,5 +1,25 @@
+/**
+ * Goal: the local transport is a behaviorally equivalent hermetic double
+ * of the remote transports — the configured home is the user's contract
+ * with beam (an existing directory, however hostile its path, behaves
+ * exactly as before; a missing one fails at construction with a
+ * beam-branded remedy, never a raw ENOENT from deep inside realpath), and
+ * every exec resolves `~` and $HOME against that home, never the caller's.
+ *
+ * Method: construct real LocalTransports against mkdtemp fixture homes —
+ * including one whose path carries spaces and shell metacharacters — and
+ * exec through real bash, asserting $HOME expansion and path handling
+ * without touching the caller's real HOME.
+ */
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LocalTransport } from "../src/transport/local.ts";
@@ -13,6 +33,40 @@ function fixtureMetacharHome(): string {
   mkdirSync(home, { recursive: true });
   return home;
 }
+
+/**
+ * The home is config-sourced, so its existence is the user's contract with
+ * beam, not an internal invariant: an existing directory must behave exactly
+ * as before, a missing one must fail at construction with the path and the
+ * remedy — never a raw filesystem error from deep inside realpath.
+ */
+describe("local transport home boundary", () => {
+  test("an existing home constructs a working transport", async () => {
+    const home = mkdtempSync(join(tmpdir(), "beam-lh-"));
+    const t = new LocalTransport(home);
+    expect(t.label).toBe(`local (home=${home})`);
+    expect(await t.execChecked('printf %s "$HOME"')).toBe(home);
+  });
+
+  test("a missing home fails with a beam-branded remedy, not a raw ENOENT", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "beam-lh-")), "no-such-home");
+    let thrown: unknown;
+    try {
+      new LocalTransport(missing);
+    } catch (err) {
+      thrown = err;
+    }
+    if (!(thrown instanceof Error)) throw new Error("expected the constructor to throw an Error");
+    expect(thrown.message).toContain(`beam: local transport home does not resolve: ${missing}`);
+    expect(thrown.message).toContain("create that directory");
+    // The filesystem fault stays attached for diagnosis.
+    const cause = thrown.cause;
+    if (!(cause instanceof Error) || !("code" in cause)) {
+      throw new Error("expected the original filesystem error as cause");
+    }
+    expect(cause.code).toBe("ENOENT");
+  });
+});
 
 describe("local transport HOME isolation", () => {
   test("interactiveArgv pins the isolated HOME and preserves the target command verbatim", () => {
@@ -40,7 +94,8 @@ describe("local transport HOME isolation", () => {
     }
   });
 
-  test("beam login shape: a harness login writes and reads only the target home, never the caller's", async () => {
+  test("beam login shape: a harness login writes and reads only the target home," +
+    " never the caller's", async () => {
     const home = mkdtempSync(join(tmpdir(), "beam-lh-"));
     const t = new LocalTransport(home);
     // Unique per run so the caller-HOME assertion can never pass on a leftover.
@@ -85,9 +140,8 @@ describe("local transport HOME isolation", () => {
     const home = fixtureMetacharHome();
     const t = new LocalTransport(home);
     const storeDir = `.fakeharness-${crypto.randomUUID()}`;
-    const res = await run(
-      t.interactiveArgv(`mkdir -p "$HOME/${storeDir}" && echo token > "$HOME/${storeDir}/auth.json"`),
-    );
+    const script = `mkdir -p "$HOME/${storeDir}" && echo token > "$HOME/${storeDir}/auth.json"`;
+    const res = await run(t.interactiveArgv(script));
     expect(res.code).toBe(0);
     expect(readFileSync(join(home, storeDir, "auth.json"), "utf8")).toBe("token\n");
     expect(existsSync(join(CALLER_HOME, storeDir))).toBe(false);

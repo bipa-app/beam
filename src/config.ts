@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensurePrivateBeamDir } from "./util/private-dir.ts";
 import type { BeamEnv } from "./env.ts";
 
 /** A remote (or local, for testing) place beam can ship workspaces to. */
@@ -45,7 +46,10 @@ export interface AgentSandboxTargetSpec {
   type: "agent-sandbox";
   /** kubectl context name — pinned on every call; the ambient current-context is never used. */
   context: string;
-  /** Namespace holding this user's SandboxClaims (one namespace per user is the isolation boundary). Must be a DNS label. */
+  /**
+   * Namespace holding this user's SandboxClaims (one namespace per user is
+   * the isolation boundary). Must be a DNS label.
+   */
   namespace: string;
   /** SandboxTemplate each handoff's claim instantiates. Must be a DNS subdomain. */
   template: string;
@@ -100,7 +104,7 @@ export function loadConfig(env: BeamEnv): Config {
 export function writeSampleConfig(env: BeamEnv): string {
   const path = configPath(env);
   if (existsSync(path)) return path;
-  mkdirSync(env.beamDir, { recursive: true });
+  ensurePrivateBeamDir(env.beamDir);
   writeFileSync(path, JSON.stringify(SAMPLE_CONFIG, null, 2) + "\n");
   return path;
 }

@@ -22,5 +22,6 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tmux
       - run: bun install --frozen-lockfile
+      - run: bun run style
       - run: bunx tsc --noEmit
       - run: bun test

@@ -74,6 +74,20 @@ export interface SandboxProvider {
   connect(ref?: SandboxRef): Promise<Transport>;
   /** Delete provider-owned resources (the claim). No-op for raw transports. */
   destroy(ref: SandboxRef): Promise<void>;
+  /**
+   * Finish a purge WITHOUT a connection — legal only after the caller has
+   * verified BOTH owner-bound cleanup receipts (workspace emptied, session
+   * traces cleaned) for this exact record, i.e. the only step a crash can
+   * have lost is the claim delete or its terminal state write. Present
+   * only on providers with a managed exact-UID resource lifecycle; this is
+   * claim-identity convergence, NOT storage erasure — it never substitutes
+   * for the connected cleanup. Semantics: a pinned UID is required;
+   * absence converges; the exact pinned object is deleted under a
+   * server-side UID precondition; a same-name replacement or any API/auth
+   * failure throws and the record is retained. Static targets (ssh/local)
+   * do not implement it: their unreachable purge always refuses.
+   */
+  destroyAfterVerifiedCleanupWithoutConnection?(ref: SandboxRef): Promise<void>;
   /** Provider-level checks for `beam doctor`, before any sandbox exists. */
   doctor(): Promise<ProviderDoctorReport>;
 }

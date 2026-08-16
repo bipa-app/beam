@@ -1,3 +1,21 @@
+/**
+ * Goal: behavioral contracts of the up/kill/login command layer:
+ *  - a retry with omitted args retains the record's stored session identity
+ *    and kickoff, even when auto-detection would pick a newer session;
+ *  - an explicit identity switch/clear on a shipped record fails BEFORE any
+ *    remote effect — nothing ships, the record is untouched;
+ *  - `beam up`/`beam login` recover a live handoff through its persisted
+ *    spec snapshot after the config target was removed, while a NEW handoff
+ *    still requires current config;
+ *  - `--help`/`-h` on kill and login are inert: help text only, no state,
+ *    no lock, no transport.
+ *
+ * Method: real `cmdUp`/`cmdKill`/`cmdLogin` over the local transport inside
+ * hermetic BEAM_HOME/BEAM_DIR temp fixtures, with a stub `omp` (bare exit 0)
+ * and tmux probes on a private socket; console output is captured by
+ * wrapping console.log; suites needing tmux/rsync are `describe.skipIf`-
+ * gated with an explicit 30s real-process timeout.
+ */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
@@ -14,24 +32,21 @@ import { join } from "node:path";
 import { cmdKill, cmdLogin } from "../src/commands/misc.ts";
 import { cmdUp } from "../src/commands/up.ts";
 import { resolveEnv, type BeamEnv } from "../src/env.ts";
-import { acquireOperationLock, addRecord, getRecord, loadState, type BeamRecord } from "../src/state.ts";
+import {
+  acquireOperationLock,
+  addRecord,
+  getRecord,
+  loadState,
+  type BeamRecord,
+} from "../src/state.ts";
 import { remoteWorkspaceName } from "../src/workspace.ts";
-
-/**
- * Behavioral contracts of the up/kill/login command layer:
- *  - a retry with omitted args retains the record's stored session identity
- *    and kickoff, even when auto-detection would pick a newer session;
- *  - an explicit identity switch/clear on a shipped record fails BEFORE any
- *    remote effect — nothing ships, the record is untouched;
- *  - `beam up`/`beam login` recover a live handoff through its persisted
- *    spec snapshot after the config target was removed, while a NEW handoff
- *    still requires current config;
- *  - `--help`/`-h` on kill and login are inert: help text only, no state,
- *    no lock, no transport.
- */
 
 const TMUX_SOCKET = `beamguard-${process.pid}`;
 const HAVE_DEPS = Bun.which("tmux") !== null && Bun.which("rsync") !== null;
+
+// Explicit real-process budget for every gated test below: a local rsync
+// ship plus tmux probes — the same cost class e2e.test.ts budgets at 30s.
+const ROUND_TRIP_TIMEOUT_MS = 30_000;
 
 // fake omp: `beam login` runs it bare (exit 0 = done); --no-start means the
 // resume path is never taken in these tests.
@@ -83,132 +98,166 @@ function theRecord(): BeamRecord {
   return records[0]!;
 }
 
-describe.skipIf(!HAVE_DEPS)("up identity/kickoff retention and target recovery (local transport)", () => {
-  beforeAll(() => {
-    savedCwd = process.cwd();
-    for (const k of ["BEAM_HOME", "BEAM_DIR", "PATH"]) savedEnv[k] = process.env[k];
+describe.skipIf(!HAVE_DEPS)(
+  "up identity/kickoff retention and target recovery (local transport)",
+  () => {
+    beforeAll(() => {
+      savedCwd = process.cwd();
+      for (const k of ["BEAM_HOME", "BEAM_DIR", "PATH"]) savedEnv[k] = process.env[k];
 
-    localHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-guards-home-")));
-    remoteHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-guards-rhome-")));
-    remoteRoot = join(remoteHome, "beam-root");
-    beamDir = join(localHome, ".beam");
-    workDir = join(localHome, "work", "app");
-    otherWorkDir = join(localHome, "work", "other");
-    remoteCwd = join(remoteRoot, remoteWorkspaceName(workDir));
+      localHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-guards-home-")));
+      remoteHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-guards-rhome-")));
+      remoteRoot = join(remoteHome, "beam-root");
+      beamDir = join(localHome, ".beam");
+      workDir = join(localHome, "work", "app");
+      otherWorkDir = join(localHome, "work", "other");
+      remoteCwd = join(remoteRoot, remoteWorkspaceName(workDir));
 
-    mkdirSync(join(workDir, "src"), { recursive: true });
-    mkdirSync(otherWorkDir, { recursive: true });
-    writeFileSync(join(workDir, "hello.txt"), "hello beam\n");
+      mkdirSync(join(workDir, "src"), { recursive: true });
+      mkdirSync(otherWorkDir, { recursive: true });
+      writeFileSync(join(workDir, "hello.txt"), "hello beam\n");
 
-    // Stored session (older). A newer drifted session is added mid-suite.
-    storeDir = join(localHome, ".omp", "agent", "sessions", "-work-app");
-    mkdirSync(storeDir, { recursive: true });
-    writeSession("sess-aaa", "2026-08-01T10-00-00-000Z", 600);
+      // Stored session (older). A newer drifted session is added mid-suite.
+      storeDir = join(localHome, ".omp", "agent", "sessions", "-work-app");
+      mkdirSync(storeDir, { recursive: true });
+      writeSession("sess-aaa", "2026-08-01T10-00-00-000Z", 600);
 
-    mkdirSync(beamDir, { recursive: true });
-    writeFileSync(
-      join(beamDir, "config.json"),
-      JSON.stringify({
-        defaultTarget: "sandbox",
-        targets: {
-          sandbox: { type: "local", root: remoteRoot, home: remoteHome, tmuxSocket: TMUX_SOCKET },
-        },
-      }),
+      mkdirSync(beamDir, { recursive: true });
+      writeFileSync(
+        join(beamDir, "config.json"),
+        JSON.stringify({
+          defaultTarget: "sandbox",
+          targets: {
+            sandbox: { type: "local", root: remoteRoot, home: remoteHome, tmuxSocket: TMUX_SOCKET },
+          },
+        }),
+      );
+
+      const fakeBin = join(localHome, "fakebin");
+      mkdirSync(fakeBin);
+      writeFileSync(join(fakeBin, "omp"), FAKE_OMP);
+      chmodSync(join(fakeBin, "omp"), 0o755);
+      process.env.PATH = `${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+      process.env.BEAM_HOME = localHome;
+      process.env.BEAM_DIR = beamDir;
+      process.chdir(workDir);
+    });
+
+    afterAll(() => {
+      process.chdir(savedCwd);
+      for (const [k, v] of Object.entries(savedEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
+
+    test("first up persists session identity and kickoff", async () => {
+      await cmdUp(["--no-start", "-m", "first kickoff"]);
+
+      const record = theRecord();
+      expect(record.status).toBe("up");
+      expect(record.tool).toBe("omp");
+      expect(record.sessionId).toBe("sess-aaa");
+      expect(record.kickoff).toBe("first kickoff");
+      expect(readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8")).toContain("sess-aaa");
+    }, ROUND_TRIP_TIMEOUT_MS);
+
+    test(
+      "an omitted-argument retry keeps stored identity but refuses to overwrite a shipped handoff",
+      async () => {
+        // A newer session appears locally: auto-detection would now pick it.
+        writeSession("sess-bbb", "2026-08-02T10-00-00-000Z", 0);
+
+        await expect(cmdUp(["--no-start"])).rejects.toThrow(/already up on sandbox/);
+
+        const record = theRecord();
+        expect(record.sessionId).toBe("sess-aaa"); // retained, not the newest
+        expect(record.kickoff).toBe("first kickoff"); // omitted -m keeps the stored kickoff
+        expect(record.status).toBe("up");
+        expect(readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8")).toContain(
+          "sess-aaa",
+        );
+      },
+      ROUND_TRIP_TIMEOUT_MS,
     );
 
-    const fakeBin = join(localHome, "fakebin");
-    mkdirSync(fakeBin);
-    writeFileSync(join(fakeBin, "omp"), FAKE_OMP);
-    chmodSync(join(fakeBin, "omp"), 0o755);
-    process.env.PATH = `${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
-    process.env.BEAM_HOME = localHome;
-    process.env.BEAM_DIR = beamDir;
-    process.chdir(workDir);
-  });
+    test(
+      "an explicit session switch on a shipped record fails without any remote mutation",
+      async () => {
+        writeFileSync(join(workDir, "not-shipped.txt"), "must never land remotely\n");
+        const before = theRecord();
 
-  afterAll(() => {
-    process.chdir(savedCwd);
-    for (const [k, v] of Object.entries(savedEnv)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  });
+        await expect(cmdUp(["--no-start", "--session", "sess-bbb"])).rejects.toThrow(
+          /already shipped session omp sess-aaa/,
+        );
 
-  test("first up persists session identity and kickoff", async () => {
-    await cmdUp(["--no-start", "-m", "first kickoff"]);
+        const after = theRecord();
+        expect(after.sessionId).toBe("sess-aaa");
+        expect(after.kickoff).toBe("first kickoff");
+        expect(after.status).toBe(before.status);
+        // The refusal fired before the ship: the new local file never landed.
+        expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
+        expect(readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8")).toContain(
+          "sess-aaa",
+        );
+      },
+      ROUND_TRIP_TIMEOUT_MS,
+    );
 
-    const record = theRecord();
-    expect(record.status).toBe("up");
-    expect(record.tool).toBe("omp");
-    expect(record.sessionId).toBe("sess-aaa");
-    expect(record.kickoff).toBe("first kickoff");
-    expect(readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8")).toContain("sess-aaa");
-  });
+    test("--no-session cannot clear the sole identity of a shipped record", async () => {
+      await expect(cmdUp(["--no-start", "--no-session"])).rejects.toThrow(
+        /--no-session would orphan/,
+      );
 
-  test("a retry with omitted args retains the stored session and kickoff despite detection drift", async () => {
-    // A newer session appears locally: auto-detection would now pick it.
-    writeSession("sess-bbb", "2026-08-02T10-00-00-000Z", 0);
+      const record = theRecord();
+      expect(record.sessionId).toBe("sess-aaa");
+      expect(record.tool).toBe("omp");
+      expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
+    }, ROUND_TRIP_TIMEOUT_MS);
 
-    await cmdUp(["--no-start"]);
+    test(
+      "up resolves the retained target snapshot after config removal and still refuses re-shipping",
+      async () => {
+        writeFileSync(join(beamDir, "config.json"), JSON.stringify({ targets: {} }));
 
-    const record = theRecord();
-    expect(record.sessionId).toBe("sess-aaa"); // retained, not the newest
-    expect(record.kickoff).toBe("first kickoff"); // omitted -m keeps the stored kickoff
-    expect(record.status).toBe("up");
-    expect(readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8")).toContain("sess-aaa");
-  });
+        await expect(cmdUp(["--no-start"])).rejects.toThrow(/already up on sandbox/);
 
-  test("an explicit session switch on a shipped record fails without any remote mutation", async () => {
-    writeFileSync(join(workDir, "not-shipped.txt"), "must never land remotely\n");
-    const before = theRecord();
+        const record = theRecord(); // still the SAME handoff, no second record
+        expect(record.status).toBe("up");
+        expect(record.sessionId).toBe("sess-aaa");
+        // Recovery used the persisted target, but the completed ship remained
+        // immutable: the local-only file never overwrote the retained remote.
+        expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
+      },
+      ROUND_TRIP_TIMEOUT_MS,
+    );
 
-    await expect(cmdUp(["--no-start", "--session", "sess-bbb"])).rejects.toThrow(/already shipped session omp sess-aaa/);
+    test(
+      "a new handoff still requires current config — recovery never authors records",
+      async () => {
+        process.chdir(otherWorkDir);
+        try {
+          await expect(cmdUp(["--no-start", "--no-session"])).rejects.toThrow(
+            /no targets configured/,
+          );
+        } finally {
+          process.chdir(workDir);
+        }
+        expect(loadState(resolveEnv()).records.length).toBe(1);
+      },
+      ROUND_TRIP_TIMEOUT_MS,
+    );
 
-    const after = theRecord();
-    expect(after.sessionId).toBe("sess-aaa");
-    expect(after.kickoff).toBe("first kickoff");
-    expect(after.status).toBe(before.status);
-    // The refusal fired before the ship: the new local file never landed.
-    expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
-    expect(readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8")).toContain("sess-aaa");
-  });
-
-  test("--no-session cannot clear the sole identity of a shipped record", async () => {
-    await expect(cmdUp(["--no-start", "--no-session"])).rejects.toThrow(/--no-session would orphan/);
-
-    const record = theRecord();
-    expect(record.sessionId).toBe("sess-aaa");
-    expect(record.tool).toBe("omp");
-    expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
-  });
-
-  test("up recovers the live handoff through its snapshot after the config target is removed", async () => {
-    writeFileSync(join(beamDir, "config.json"), JSON.stringify({ targets: {} }));
-
-    await cmdUp(["--no-start"]);
-
-    const record = theRecord(); // still the SAME handoff, no second record
-    expect(record.status).toBe("up");
-    expect(record.sessionId).toBe("sess-aaa");
-    // The recovered ship really ran, bound through the persisted spec.
-    expect(readFileSync(join(remoteCwd, "not-shipped.txt"), "utf8")).toBe("must never land remotely\n");
-  });
-
-  test("a new handoff still requires current config — recovery never authors records", async () => {
-    process.chdir(otherWorkDir);
-    try {
-      await expect(cmdUp(["--no-start", "--no-session"])).rejects.toThrow(/no targets configured/);
-    } finally {
-      process.chdir(workDir);
-    }
-    expect(loadState(resolveEnv()).records.length).toBe(1);
-  });
-
-  test("login recovers through the live handoff's snapshot when the config target is gone", async () => {
-    const { out } = await captureLog(() => cmdLogin([]));
-    expect(out).toContain("on sandbox"); // bound to the recorded target name
-  });
-});
+    test(
+      "login recovers through the live handoff's snapshot when the config target is gone",
+      async () => {
+        const { out } = await captureLog(() => cmdLogin([]));
+        expect(out).toContain("on sandbox"); // bound to the recorded target name
+      },
+      ROUND_TRIP_TIMEOUT_MS,
+    );
+  },
+);
 
 describe("kill/login --help is inert", () => {
   test("beam kill --help prints help without touching state, locks, or records", async () => {
@@ -222,6 +271,16 @@ describe("kill/login --help is inert", () => {
       expect(existsSync(env.beamDir)).toBe(false); // nothing created
       expect(first.out).toContain("beam kill —");
       expect(first.out).toContain("--purge");
+      // The retained-generation contract is user-facing help text: kill
+      // without --purge retains the shipped generation, a later `beam up`
+      // restarts it in place with ZERO local re-ship, and new local bytes
+      // require collect + explicit kill --purge + a new up.
+      expect(first.out).toContain("RETAINED");
+      expect(first.out).toContain("ZERO");
+      expect(first.out).toContain("restarts the exact remote generation in place");
+      expect(first.out).toContain("collect first");
+      expect(first.out).toMatch(/kill <id> --purge/);
+      expect(first.out).not.toContain("down --purge");
 
       // A live record whose operation lock is HELD: help must not contend
       // the lock, select the record, or change its status.

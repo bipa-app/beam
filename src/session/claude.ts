@@ -1,8 +1,20 @@
-import { copyFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { shqRemotePath } from "../util/shell.ts";
+import { shq } from "../util/shell.ts";
 import type { Transport } from "../transport/types.ts";
-import type { InstalledSession, LocalSession, SessionAdapter } from "./types.ts";
+import {
+  cleanupGuardedHomeFile,
+  collectGuardedHomeFile,
+  installGuardedHomeFile,
+} from "./guarded-store.ts";
+import type {
+  InstalledSession,
+  InstallOptions,
+  LocalSession,
+  SessionAdapter,
+  StagedReturn,
+} from "./types.ts";
 
 /**
  * Claude Code stores sessions as ~/.claude/projects/<slug>/<uuid>.jsonl,
@@ -16,6 +28,34 @@ import type { InstalledSession, LocalSession, SessionAdapter } from "./types.ts"
 export function claudeProjectSlug(cwd: string): string {
   return cwd.replace(/[/.]/g, "-");
 }
+function claudeStorePath(remoteCwd: string, sessionId: string): string[] {
+  return [".claude", "projects", claudeProjectSlug(remoteCwd), `${sessionId}.jsonl`];
+}
+
+function assertClaudeTranscript(text: string, sessionId: string): void {
+  let sawIdentity = false;
+  for (const line of text.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      throw new Error("remote Claude transcript contains invalid JSONL");
+    }
+    if (typeof entry !== "object" || entry === null) continue;
+    const identity = (entry as { sessionId?: unknown }).sessionId;
+    if (identity === undefined) continue;
+    if (identity !== sessionId) {
+      throw new Error(
+        `remote Claude transcript belongs to session ${String(identity)}, not ${sessionId}`,
+      );
+    }
+    sawIdentity = true;
+  }
+  if (!sawIdentity) {
+    throw new Error(`remote Claude transcript does not prove session identity ${sessionId}`);
+  }
+}
 
 export class ClaudeAdapter implements SessionAdapter {
   readonly tool = "claude" as const;
@@ -23,7 +63,8 @@ export class ClaudeAdapter implements SessionAdapter {
   readonly loginArgv = ["claude"];
   // Linux stores OAuth in a credentials file; macOS uses the Keychain, so
   // Darwin is treated as indeterminate-pass rather than blocking real users.
-  readonly remoteAuthProbe = '[ -f "$HOME/.claude/.credentials.json" ] || [ "$(uname)" = "Darwin" ]';
+  readonly remoteAuthProbe =
+    '[ -f "$HOME/.claude/.credentials.json" ] || [ "$(uname)" = "Darwin" ]';
 
   async locate(cwd: string, home: string, sessionRef?: string): Promise<LocalSession | undefined> {
     const projects = join(home, ".claude", "projects");
@@ -51,41 +92,42 @@ export class ClaudeAdapter implements SessionAdapter {
     t: Transport,
     session: LocalSession,
     remoteCwd: string,
-    kickoff?: string,
+    { kickoff }: InstallOptions = {},
   ): Promise<InstalledSession> {
-    const remoteStore = `~/.claude/projects/${claudeProjectSlug(remoteCwd)}/${session.id}.jsonl`;
-    await t.sendFile(session.file, remoteStore);
+    const path = claudeStorePath(remoteCwd, session.id);
+    assertClaudeTranscript(readFileSync(session.file, "utf8"), session.id);
+    const remoteStore = await installGuardedHomeFile(t, session.file, path);
     return {
       resumeArgv: ["claude", "--resume", session.id, ...(kickoff ? [kickoff] : [])],
       notes: [`session -> ${remoteStore}`],
     };
   }
 
-  async collect(
+  async stageReturn(
     t: Transport,
     session: LocalSession,
-    _localCwd: string,
+    localCwd: string,
     remoteCwd: string,
-  ): Promise<string> {
-    const remoteStore = `~/.claude/projects/${claudeProjectSlug(remoteCwd)}/${session.id}.jsonl`;
-    if (!(await t.exists(remoteStore))) {
-      throw new Error(`remote session ${remoteStore} not found`);
-    }
-    if (existsSync(session.file)) {
-      copyFileSync(session.file, `${session.file}.bak-${Date.now()}`);
-    }
-    await t.fetchFile(remoteStore, session.file);
-    return `claude --resume ${session.id}`;
+    stageDir: string,
+  ): Promise<StagedReturn> {
+    const path = claudeStorePath(remoteCwd, session.id);
+    const returned = await collectGuardedHomeFile(t, path);
+    assertClaudeTranscript(returned, session.id);
+    writeFileSync(join(stageDir, "session.jsonl"), returned);
+    // Claude Code has no isolated-path resume: the hint is the exact manual
+    // import — beam itself never writes into the live ~/.claude store.
+    const hint =
+      `manual import (claude cannot resume an isolated path): ` +
+      `cp ${shq(join(stageDir, "session.jsonl"))} ${shq(session.file)} && cd ${shq(localCwd)} && ` +
+      `claude --resume ${shq(session.id)} ` +
+      `# replaces your local copy of this session; it was left untouched`;
+    return {
+      hint,
+      remoteSessionSha256: createHash("sha256").update(returned).digest("hex"),
+    };
   }
 
   async cleanupRemote(t: Transport, session: LocalSession, remoteCwd: string): Promise<void> {
-    const dir = `~/.claude/projects/${claudeProjectSlug(remoteCwd)}`;
-    // Checked: a trace that cannot be proven gone must fail the purge BEFORE
-    // the claim is deleted — on persistent-home templates the store outlives
-    // the sandbox, and a silent failure here would strand the transcript.
-    await t.execChecked(`rm -f ${shqRemotePath(`${dir}/${session.id}.jsonl`)}`);
-    // Drop the project dir too when ours was the only session in it (the
-    // `|| true` keeps a non-empty dir; transport failures still throw).
-    await t.execChecked(`rmdir ${shqRemotePath(dir)} 2>/dev/null || true`);
+    await cleanupGuardedHomeFile(t, claudeStorePath(remoteCwd, session.id), true);
   }
 }

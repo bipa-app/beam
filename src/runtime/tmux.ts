@@ -6,6 +6,15 @@ function detail(res: ExecResult): string {
   const text = (res.stderr || res.stdout).trim();
   return text === "" ? "(no output)" : text;
 }
+/** Exit 1 is absence only when tmux itself says session/server is absent. */
+function provesAbsence(res: ExecResult): boolean {
+  const text = `${res.stderr}\n${res.stdout}`;
+  return (
+    /^can't find session: .+$/m.test(text) ||
+    /^no server running on .+$/m.test(text) ||
+    /^error connecting to .+ \(No such file or directory\)$/m.test(text)
+  );
+}
 
 /**
  * TmuxRuntime: the remote agent lives in a detached tmux session.
@@ -35,7 +44,9 @@ export class TmuxRuntime {
   }
 
   async start(name: string, cwdAbs: string, argv: string[]): Promise<void> {
-    const inner = `${shjoin(argv)}; code=$?; echo; echo "[beam] agent exited ($code) - shell below"; exec bash -l`;
+    const inner =
+      `${shjoin(argv)}; code=$?; echo; ` +
+      `echo "[beam] agent exited ($code) - shell below"; exec bash -l`;
     const pane = `bash -c ${shq(inner)}`;
     await this.t.execChecked(
       `${this.tmux} new-session -d -s ${shq(name)} -c ${shq(cwdAbs)} ${shq(pane)}`,
@@ -43,18 +54,16 @@ export class TmuxRuntime {
   }
 
   /**
-   * Liveness is three-valued and this method never collapses it to two:
-   * exit 0 means the session exists, exit 1 is tmux's one documented
-   * absent-session result (a missing server on the socket reports the same
-   * way — no server, no session). Anything else — 127 (tmux not
-   * installed), 255 (ssh/transport failure), signals — is NOT knowledge of
-   * absence, so it throws rather than let a caller read "unknown" as
-   * "gone" and sync, rewrite state, or purge over a possibly-live agent.
+   * Liveness is three-valued. Exit 0 proves presence. Exit 1 proves absence
+   * only with tmux's known missing-session/server diagnostic; tmux also uses
+   * 1 for socket, permission, and protocol errors. Every other outcome is
+   * unknown and throws, so no caller can sync or purge over a possibly-live
+   * agent.
    */
   async alive(name: string): Promise<boolean> {
     const res = await this.t.exec(`${this.tmux} has-session -t ${shq("=" + name)}`);
     if (res.code === 0) return true;
-    if (res.code === 1) return false;
+    if (res.code === 1 && provesAbsence(res)) return false;
     throw new Error(
       `cannot determine whether tmux session ${name} is alive ` +
         `(has-session exited ${res.code}): ${detail(res)}`,
@@ -94,7 +103,8 @@ export class TmuxRuntime {
     if (res.code === 0) return;
     if (!(await this.alive(name))) return;
     throw new Error(
-      `tmux kill of ${name} failed and the session is still alive (exit ${res.code}): ${detail(res)}`,
+      `tmux kill of ${name} failed and the session is still alive ` +
+        `(exit ${res.code}): ${detail(res)}`,
     );
   }
 

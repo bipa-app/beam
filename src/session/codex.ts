@@ -1,8 +1,28 @@
-import { copyFileSync, existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, relative } from "node:path";
-import { shqRemotePath } from "../util/shell.ts";
+import { shq } from "../util/shell.ts";
 import type { Transport } from "../transport/types.ts";
-import type { InstalledSession, LocalSession, SessionAdapter } from "./types.ts";
+import {
+  cleanupGuardedHomeFile,
+  collectGuardedHomeFile,
+  installGuardedHomeFile,
+} from "./guarded-store.ts";
+import type {
+  InstalledSession,
+  InstallOptions,
+  LocalSession,
+  SessionAdapter,
+  StagedReturn,
+} from "./types.ts";
 
 /**
  * Codex stores sessions as ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl.
@@ -11,11 +31,53 @@ import type { InstalledSession, LocalSession, SessionAdapter } from "./types.ts"
  * the same home-relative store path on the target.
  */
 
-const SCAN_LIMIT = 400;
+const CANDIDATE_SCAN_COUNT = 400;
+
+/**
+ * Read only the leading bytes of a transcript and return its first line —
+ * the `session_meta` record. locate inspects up to CANDIDATE_SCAN_COUNT
+ * candidates and transcripts grow to many megabytes, so no candidate is
+ * ever read whole.
+ * A first line longer than the cap comes back truncated, parses as malformed
+ * JSON, and the candidate is skipped — the same outcome as any other corrupt
+ * header. Read errors propagate, exactly as a whole-file read's would.
+ */
+export const HEADER_SCAN_BYTES = 64 * 1024;
+
+function readHeaderLine(file: string): string {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    const buf = Buffer.alloc(HEADER_SCAN_BYTES);
+    const n = readSync(fd, buf, 0, buf.length, 0);
+    return buf.toString("utf8", 0, n).split("\n", 1)[0] ?? "";
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 interface SessionMeta {
   type?: string;
   payload?: { session_id?: string; id?: string; cwd?: string };
+}
+function assertCodexTranscript(text: string, sessionId: string, expectedCwd?: string): void {
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  let meta: SessionMeta;
+  try {
+    meta = JSON.parse(firstLine) as SessionMeta;
+  } catch {
+    throw new Error("remote Codex transcript contains invalid session metadata");
+  }
+  const identity = meta.payload?.session_id ?? meta.payload?.id;
+  if (meta.type !== "session_meta" || identity !== sessionId) {
+    throw new Error(`remote Codex transcript does not belong to session ${sessionId}`);
+  }
+  if (expectedCwd !== undefined && meta.payload?.cwd !== expectedCwd) {
+    throw new Error(
+      `remote Codex transcript records cwd ${meta.payload?.cwd ?? "(none)"}, ` +
+      `not the shipped workspace ${expectedCwd}`,
+    );
+  }
 }
 
 export class CodexAdapter implements SessionAdapter {
@@ -34,8 +96,8 @@ export class CodexAdapter implements SessionAdapter {
     }
     files.sort((a, b) => b.mtime - a.mtime);
 
-    for (const { file, mtime } of files.slice(0, SCAN_LIMIT)) {
-      const firstLine = readFileSync(file, "utf8").split("\n", 1)[0] ?? "";
+    for (const { file, mtime } of files.slice(0, CANDIDATE_SCAN_COUNT)) {
+      const firstLine = readHeaderLine(file);
       let meta: SessionMeta;
       try {
         meta = JSON.parse(firstLine) as SessionMeta;
@@ -51,20 +113,23 @@ export class CodexAdapter implements SessionAdapter {
     return undefined;
   }
 
-  /** Home-relative store path, reused verbatim on the target. */
-  private remoteStorePath(session: LocalSession, home: string): string {
-    return `~/${relative(home, session.file)}`;
+  /** Home-relative store segments, reused verbatim on the target. */
+  private storePath(source: string): string[] {
+    const home = source.split("/.codex/")[0]!;
+    return relative(home, source).split("/");
   }
 
   async install(
     t: Transport,
     session: LocalSession,
     _remoteCwd: string,
-    kickoff?: string,
+    { kickoff }: InstallOptions = {},
   ): Promise<InstalledSession> {
-    const home = session.file.split("/.codex/")[0]!;
-    const remoteStore = this.remoteStorePath(session, home);
-    await t.sendFile(session.file, remoteStore);
+    // `file` is the staged CONTENT source; the remote layout mirrors the
+    // LIVE store path (a ship-stage path has no `/.codex/` component).
+    const path = this.storePath(session.storeFile ?? session.file);
+    assertCodexTranscript(readFileSync(session.file, "utf8"), session.id);
+    const remoteStore = await installGuardedHomeFile(t, session.file, path);
     return {
       resumeArgv: ["codex", "resume", session.id, ...(kickoff ? [kickoff] : [])],
       notes: [
@@ -74,28 +139,31 @@ export class CodexAdapter implements SessionAdapter {
     };
   }
 
-  async collect(
+  async stageReturn(
     t: Transport,
     session: LocalSession,
-    _localCwd: string,
+    localCwd: string,
     _remoteCwd: string,
-  ): Promise<string> {
-    const home = session.file.split("/.codex/")[0]!;
-    const remoteStore = this.remoteStorePath(session, home);
-    if (!(await t.exists(remoteStore))) {
-      throw new Error(`remote session ${remoteStore} not found`);
-    }
-    if (existsSync(session.file)) {
-      copyFileSync(session.file, `${session.file}.bak-${Date.now()}`);
-    }
-    await t.fetchFile(remoteStore, session.file);
-    return `codex resume ${session.id}`;
+    stageDir: string,
+  ): Promise<StagedReturn> {
+    const path = this.storePath(session.storeFile ?? session.file);
+    const returned = await collectGuardedHomeFile(t, path);
+    assertCodexTranscript(returned, session.id, localCwd);
+    // Codex resumes by id from its own store only — the hint is the exact
+    // manual import; beam itself never writes into the live ~/.codex store.
+    writeFileSync(join(stageDir, "session.jsonl"), returned);
+    const hint =
+      `manual import (codex cannot resume an isolated path): ` +
+      `cp ${shq(join(stageDir, "session.jsonl"))} ` +
+      `${shq(session.file)} && codex resume ${shq(session.id)} ` +
+      `# replaces your local copy of this session; it was left untouched`;
+    return {
+      hint,
+      remoteSessionSha256: createHash("sha256").update(returned).digest("hex"),
+    };
   }
 
   async cleanupRemote(t: Transport, session: LocalSession, _remoteCwd: string): Promise<void> {
-    const home = session.file.split("/.codex/")[0]!;
-    // Checked: on persistent-home templates this store outlives the claim,
-    // so an unproven removal must fail the purge before the claim delete.
-    await t.execChecked(`rm -f ${shqRemotePath(this.remoteStorePath(session, home))}`);
+    await cleanupGuardedHomeFile(t, this.storePath(session.storeFile ?? session.file));
   }
 }

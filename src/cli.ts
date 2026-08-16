@@ -26,8 +26,8 @@ usage: beam <command> [args]
   ls                list handoffs
   status [id]       remote liveness + last pane output
   attach [id]       attach to the remote agent (ctrl-b d to detach)
-  down [id]         stop remote agent, sync back, re-import session
-  kill [id]         kill the remote agent (--purge deletes the workspace)
+  down [id]         stop remote agent, collect + verify + stage the return (workspace AND session; remote always retained)
+  kill [id]         kill the agent (--purge explicitly abandons and erases all remote state)
 
 run \`beam <command> --help\` (up, down, kill, login) for command options.
 
