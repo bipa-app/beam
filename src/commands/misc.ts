@@ -25,7 +25,7 @@ import {
 } from "../state.ts";
 import { createProvider, type SandboxProvider } from "../provider/index.ts";
 import type { Transport } from "../transport/index.ts";
-import { TmuxRuntime } from "../runtime/tmux.ts";
+import { HerdrRuntime } from "../runtime/herdr.ts";
 import {
   assertContainedWorkspace,
   purgeOwnedWorkspaceContents,
@@ -134,11 +134,11 @@ export async function cmdStatus(args: string[]): Promise<void> {
       owner: workspaceOwnerContent(record.id, record.workspaceToken),
     });
   }
-  const runtime = new TmuxRuntime(t, spec.tmuxSocket);
-  const alive = await runtime.alive(record.tmux);
-  console.log(`  agent:  ${alive ? "running" : "not running"} (tmux ${record.tmux})`);
+  const runtime = new HerdrRuntime(t);
+  const alive = await runtime.alive(record.runtimeSession);
+  console.log(`  agent:  ${alive ? "running" : "not running"} (herdr ${record.runtimeSession})`);
   if (alive) {
-    const pane = await runtime.peek(record.tmux).catch(() => "");
+    const pane = await runtime.peek(record.runtimeSession).catch(() => "");
     if (pane) {
       console.log("  ── last output ──");
       for (const line of pane.split("\n")) console.log(`  │ ${line}`);
@@ -146,7 +146,7 @@ export async function cmdStatus(args: string[]): Promise<void> {
   }
 }
 
-/** beam attach [id] — interactive attach to the remote agent's tmux. */
+/** beam attach [id] — interactive attach to the remote agent's herdr session. */
 export async function cmdAttach(args: string[]): Promise<void> {
   const env = resolveEnv();
   const record = findRecord(env, args[0]);
@@ -161,13 +161,13 @@ export async function cmdAttach(args: string[]): Promise<void> {
       owner: workspaceOwnerContent(record.id, record.workspaceToken),
     });
   }
-  const runtime = new TmuxRuntime(t, spec.tmuxSocket);
-  if (!(await runtime.alive(record.tmux))) {
-    console.error(`agent for ${record.id} is not running (tmux ${record.tmux})`);
+  const runtime = new HerdrRuntime(t);
+  if (!(await runtime.alive(record.runtimeSession))) {
+    console.error(`agent for ${record.id} is not running (herdr ${record.runtimeSession})`);
     process.exitCode = 1;
     return;
   }
-  const res = await run(t.interactiveArgv(runtime.attachCommand(record.tmux)), {
+  const res = await run(t.interactiveArgv(runtime.attachCommand(record.runtimeSession)), {
     interactive: true,
   });
   process.exitCode = res.code;
@@ -179,7 +179,7 @@ usage: beam kill [id] [options]
   --purge    checked cleanup, then destroy: remove installed session traces,
              delete the remote workspace, destroy provisioned resources
 
-without --purge only the agent's tmux session is killed — the sandbox,
+without --purge only the agent's herdr session is killed — the sandbox,
 workspace, target reservation, and shipped generation stay RETAINED: a
 later \`beam up\` restarts the exact remote generation in place with ZERO
 local re-ship (a provisioning retry resumes only its journaled same
@@ -280,7 +280,7 @@ async function killPaneOnly(context: KillContext): Promise<void> {
     console.log(`sandbox unreachable — ${err instanceof Error ? err.message : String(err)}`);
   }
   if (t) {
-    await new TmuxRuntime(t, spec.tmuxSocket).kill(record.tmux);
+    await new HerdrRuntime(t).kill(record.runtimeSession);
     console.log(`killed remote agent for ${record.id}`);
   }
 }
@@ -299,7 +299,7 @@ async function killPurge(context: KillContext): Promise<void> {
   if (!isRemoteCwdResolved(record)) {
     // No workspace or session path was ever published, so there is
     // nothing inside the sandbox to stop or erase. In particular, do not
-    // require a working image/tmux from the claim whose provisioning
+    // require a working image/herdr from the claim whose provisioning
     // failed: journal the destroy-only phase and delete the claim.
     updateRecord(env, record.id, { status: "killing" });
     await provider.destroy(record);
@@ -400,7 +400,7 @@ async function killPurgeErase(
   receipt: KillReceipt,
 ): Promise<void> {
   const { env, provider, spec, record } = context;
-  await new TmuxRuntime(t, spec.tmuxSocket).kill(record.tmux);
+  await new HerdrRuntime(t).kill(record.runtimeSession);
   console.log(`killed remote agent for ${record.id}`);
   // Journal the purge intent (with the owner-bound phase receipt)
   // BEFORE the first erasure effect: a crash anywhere below leaves
@@ -512,7 +512,7 @@ export const DOCTOR_SENTINEL = "__beam_doctor_v1__";
 const BINARY_KEY_SHAPE = /^[a-z][a-z0-9._-]*$/;
 
 /** Non-adapter binaries a handoff needs on the target. */
-const REMOTE_TOOLS = ["rsync", "tmux"] as const;
+const REMOTE_TOOLS = ["rsync", "herdr"] as const;
 
 /**
  * Every remote doctor question fused into one script: tool/harness

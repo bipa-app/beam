@@ -9,7 +9,7 @@
    `beam up -m "keep going: finish the migration"`. beam mirrors the working
    directory to a sandbox server, ships the session transcript, and resumes the
    agent there with the steering message. Laptop off.
-2. **Watch.** `beam attach` (ssh → tmux, the full TUI) from any machine, or
+2. **Watch.** `beam attach` (ssh → herdr, the full TUI) from any machine, or
    `beam status` for a no-attach glimpse of the pane. omp users can ask the
    remote agent to run `/collab` and watch from a browser.
 3. **Return.** `beam down`. The remote agent stops, and the returned
@@ -46,7 +46,7 @@ beam CLI (Bun/TS, zero runtime deps)
         │     exec / syncUp / syncDown / sendFile / fetchFile
         │
         └── Runtime          where the agent process lives
-              tmux: start / alive / peek / interrupt / kill / attach
+              herdr: start / alive / peek / interrupt / kill / attach
 ```
 
 - **SessionAdapter** (`src/session/types.ts`) — find the session for a cwd,
@@ -67,9 +67,12 @@ beam CLI (Bun/TS, zero runtime deps)
   that attests only to the latest COMPLETED syncUp attempt: every ship
   invalidates it as its first remote action and re-earns it only on full
   success, so a failed re-ship never leaves a stale license.
-- **Runtime** (`src/runtime/tmux.ts`) — detached tmux: survives disconnects,
-  attachable from anywhere, pane capture powers `beam status`, and on agent
-  exit the pane drops to a shell so the aftermath stays inspectable.
+- **Runtime** (`src/runtime/herdr.ts`) — one named herdr session per handoff:
+  survives disconnects, attachable from anywhere, pane reads power
+  `beam status`. `start` wraps the agent argv in a `.beam/agent-start.sh`
+  script typed into the pane's shell, so the pane prints a
+  `[beam] agent exited ($code)` marker and returns to a shell on exit — the
+  aftermath stays inspectable.
 
 Local state: `~/.beam/state.json` (one record per handoff). Config:
 `~/.beam/config.json` (named targets). Both respect `BEAM_DIR`/`BEAM_HOME`
@@ -99,8 +102,10 @@ overrides, which is how tests isolate themselves.
    none existed at ship time. Claude/Codex sessions must live in their
    `~/.claude`/`~/.codex` stores remotely, so those adapters send/fetch
    explicitly.
-3. **tmux is the process manager.** No daemon to install; `beam attach` is
-   `ssh -t … tmux attach`.
+3. **herdr is the process manager.** One pinned static binary, no daemon to
+   hand-configure; sessions carry structured agent state
+   (working / blocked / idle), each handoff gets a named session, and
+   `beam attach` is `ssh -t … herdr session attach`.
 4. **Kickoff prompt in the resume argv.** `beam up -m "…"` appends the message
    to the resume command so the agent starts working unattended.
 5. **ssh is the server API.** Any box you can ssh into is a target. A richer
@@ -390,7 +395,7 @@ handshake or a fresh `kubectl exec` API call. Nothing is multiplexed or
 reused, so per-call cost (tens to low hundreds of ms on a WAN) is paid every
 time. Per command, branch-dependent: `doctor` ≤ 11 probes + ≤ 6 privilege
 probes ≈ 17; `up` ≈ 15–20 (workspace establish, containment re-proofs,
-fingerprint sandwiches, git pointer, session install, tmux start); `down`
+fingerprint sandwiches, git pointer, session install, herdr start); `down`
 ≈ 15–25 (agent stop, git collect, stage probes, session collect, final
 combined proof). At 150 ms per call that is ~2.5 s of pure handshake on an
 `up`. **Bound: round-trip count is O(1) in workspace size, file count, ref
@@ -558,8 +563,8 @@ codex scans newest-first and parses `session_meta`.
   own-sandbox VM around handoffs — see `docs/own-sandbox.md`), box.ascii.dev
   (native ssh + snapshot/fork, CLI `--json`, zero new deps — parked as the
   managed-provider experiment), Daytona, E2B.
-- A `herdr` Runtime (github.com/herdrdev/herdr) beside tmux: structured
-  working/blocked/idle state for `beam status` via its socket API, and
-  reattach lands in an agent dashboard instead of a bare pane.
+- Drive `beam status` from herdr's agent state API (`herdr agent list` /
+  `herdr agent get`): structured working/blocked/idle for every handoff
+  instead of a pane-text glimpse.
 - `beam sync` — periodic bidirectional sync while the remote agent runs.
 - A beam daemon + web dashboard for multi-user servers.

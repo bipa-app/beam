@@ -59,7 +59,7 @@ export interface RunOptions {
 /**
  * Default per-stream ceiling for captured child output: 16 MiB.
  * Generous for every internal command Beam runs (git plumbing listings,
- * kubectl JSON, tmux captures) while keeping a hostile or runaway child
+ * kubectl JSON, herdr pane reads) while keeping a hostile or runaway child
  * from growing Beam's heap without bound.
  */
 const DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;

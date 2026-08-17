@@ -347,7 +347,7 @@ describe("pi-family collect: the transcript comes off the target, never local sc
       sessionFile: file,
       localCwd: cwd,
       remoteCwd,
-      tmux: "-",
+      runtimeSession: "-",
       status: "up",
       createdAt: "t",
       updatedAt: "t",

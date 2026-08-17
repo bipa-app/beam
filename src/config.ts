@@ -14,8 +14,6 @@ export interface SshTargetSpec {
   root?: string;
   /** Extra rsync flags (default: -a -z). */
   rsyncFlags?: string[];
-  /** Named tmux socket (-L) on the remote; mostly for isolation. */
-  tmuxSocket?: string;
 }
 
 export interface LocalTargetSpec {
@@ -28,7 +26,6 @@ export interface LocalTargetSpec {
    */
   home?: string;
   rsyncFlags?: string[];
-  tmuxSocket?: string;
 }
 
 /**
@@ -59,7 +56,6 @@ export interface AgentSandboxTargetSpec {
   container?: string;
   /** Directory inside the sandbox holding shipped workspaces, e.g. /data/bipa. Default: ~/beam. */
   root?: string;
-  tmuxSocket?: string;
 }
 
 export interface Config {

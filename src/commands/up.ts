@@ -40,7 +40,7 @@ import {
 } from "../state.ts";
 import { createProvider, type SandboxProvider } from "../provider/index.ts";
 import type { Transport } from "../transport/index.ts";
-import { TmuxRuntime } from "../runtime/tmux.ts";
+import { HerdrRuntime } from "../runtime/herdr.ts";
 import { probePrivilege } from "../security.ts";
 import {
   assertContainedWorkspace,
@@ -309,7 +309,7 @@ function reserveUpTarget(o: UpReserveOptions): { record: BeamRecord; reused: boo
         // is created atomically from it; only exact bytes are ever
         // re-adopted.
         workspaceToken: randomBytes(16).toString("hex"),
-        tmux: `beam-${id}`,
+        runtimeSession: `beam-${id}`,
         status: "provisioning",
         createdAt: now,
         updatedAt: now,
@@ -606,7 +606,7 @@ type UpProvisionScreenOptions = {
 };
 
 /** The provisioned transport and runtime a ship proceeds through. */
-type UpScreenedTransport = { t: Transport; runtime: TmuxRuntime };
+type UpScreenedTransport = { t: Transport; runtime: HerdrRuntime };
 
 /**
  * Provision the transport, then screen the reused record's status before
@@ -627,8 +627,8 @@ async function upProvisionAndScreen(
   const t = await o.provider.provision(o.record, (sandbox) => {
     updateRecord(o.env, o.record.id, { sandbox });
   });
-  const runtime = new TmuxRuntime(t, o.spec.tmuxSocket);
-  const agentAlive = o.reused && (await runtime.alive(o.record.tmux));
+  const runtime = new HerdrRuntime(t);
+  const agentAlive = o.reused && (await runtime.alive(o.record.runtimeSession));
   if (o.reused && o.record.status === "starting") {
     upFinalizeInterruptedStart({ env: o.env, record: o.record, agentAlive });
     return undefined;
@@ -647,7 +647,7 @@ async function upProvisionAndScreen(
   // Reusing a live sandbox: never clobber a running agent's workspace.
   if (agentAlive) {
     throw new Error(
-      `handoff ${o.record.id} already has a live agent (tmux ${o.record.tmux}) on ` +
+      `handoff ${o.record.id} already has a live agent (herdr ${o.record.runtimeSession}) on ` +
         `${o.targetName} — beam attach ${o.record.id} to watch it, or collect it ` +
         `(beam down ${o.record.id}) and retire it (beam kill ${o.record.id} --purge) ` +
         `before re-shipping`,
@@ -657,7 +657,7 @@ async function upProvisionAndScreen(
 }
 
 /**
- * A previous up died between starting tmux and journaling `up`. The ship
+ * A previous up died between starting the runtime and journaling `up`. The ship
  * itself had already completed — mirror, git payload, and session install
  * all precede the `starting` write — so whatever liveness says, this is a
  * COMPLETED handoff whose agent may have run: finalize it, never re-ship
@@ -691,7 +691,7 @@ function upFinalizeInterruptedStart(o: {
     console.log(
       `\nfinalized interrupted handoff ${id} (agent already running, nothing re-shipped)`,
     );
-    console.log(`  watch:   beam attach ${id}   (detach: ctrl-b d)`);
+    console.log(`  watch:   beam attach ${id}   (detach: ctrl+b q)`);
     console.log(`  return:  beam down ${id}`);
   } else {
     console.log(
@@ -721,14 +721,15 @@ async function upRestartRetainedAgent(o: {
   record: BeamRecord;
   spec: TargetSpec;
   t: Transport;
-  runtime: TmuxRuntime;
+  runtime: HerdrRuntime;
   agentAlive: boolean;
   targetName: string;
 }): Promise<void> {
   const record = o.record;
   if (o.agentAlive) {
     throw new Error(
-      `handoff ${record.id} already has a live agent (tmux ${record.tmux}) on ${o.targetName} — ` +
+      `handoff ${record.id} already has a live agent (herdr ${record.runtimeSession}) ` +
+        `on ${o.targetName} — ` +
         `beam attach ${record.id} to watch it, or collect it (beam down ${record.id}) and ` +
         `retire it (beam kill ${record.id} --purge) before re-shipping`,
     );
@@ -748,14 +749,14 @@ async function upRestartRetainedAgent(o: {
     await assertContainedWorkspace(o.t, targetRoot(o.spec), record.remoteCwd, {
       owner: workspaceOwnerContent(record.id, record.workspaceToken),
     });
-    await o.runtime.start(record.tmux, record.remoteCwd, record.resumeArgv);
+    await o.runtime.start(record.runtimeSession, record.remoteCwd, record.resumeArgv);
     console.log(
       `\nrestarted handoff ${record.id}'s agent in place on ${o.targetName} — nothing was ` +
         `re-shipped`,
     );
     console.log(`  (local changes stay local: beam down ${record.id} collects the remote work;`);
     console.log(`   retire with beam kill ${record.id} --purge before shipping fresh)`);
-    console.log(`  watch:   beam attach ${record.id}   (detach: ctrl-b d)`);
+    console.log(`  watch:   beam attach ${record.id}   (detach: ctrl+b q)`);
     return;
   }
   throw new Error(
@@ -772,7 +773,7 @@ type UpExecuteShipOptions = {
   record: BeamRecord;
   spec: TargetSpec;
   t: Transport;
-  runtime: TmuxRuntime;
+  runtime: HerdrRuntime;
   detected: DetectedSession | undefined;
   wtGit: MaterializedWorktreeGit | undefined;
   kickoff: string | undefined;
@@ -1726,7 +1727,7 @@ async function upInstallSessionAndStart(
   o: {
     record: BeamRecord;
     detected: DetectedSession | undefined;
-    runtime: TmuxRuntime;
+    runtime: HerdrRuntime;
     kickoff: string | undefined;
     pending: ShipPendingJournal | undefined;
     stagedSession: StagedSessionJournal | undefined;
@@ -1776,11 +1777,11 @@ async function upInstallSessionAndStart(
   // starts. A mismatch refuses; the start never runs.
   await assertContainedWorkspace(ship.t, ship.root, ship.remoteCwd, { owner: ship.owner });
   if (o.noStart) return false;
-  // Journal `starting` BEFORE tmux runs: a crash between the start and
-  // the `up` flip leaves a status telling the retry that an agent may
-  // already be running — finalize it, never re-ship over it.
+  // Journal `starting` BEFORE runtime.start runs: a crash between the
+  // start and the `up` flip leaves a status telling the retry that an
+  // agent may already be running — finalize it, never re-ship over it.
   updateRecord(ship.env, ship.id, { status: "starting", resumeArgv: installed.resumeArgv });
-  await o.runtime.start(o.record.tmux, ship.remoteCwd, installed.resumeArgv);
+  await o.runtime.start(o.record.runtimeSession, ship.remoteCwd, installed.resumeArgv);
   return true;
 }
 
@@ -1817,7 +1818,7 @@ function upPromoteToUp(
 
   console.log(`\nbeamed up as ${ship.id} (target: ${ship.targetName})`);
   if (o.started) {
-    console.log(`  watch:   beam attach ${ship.id}   (detach: ctrl-b d)`);
+    console.log(`  watch:   beam attach ${ship.id}   (detach: ctrl+b q)`);
     console.log(`  glimpse: beam status ${ship.id}`);
     if (o.detected?.adapter.tool === "omp") {
       console.log(`  browser: attach once and run /collab for a web link`);

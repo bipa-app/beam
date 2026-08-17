@@ -263,7 +263,7 @@ describe("pi collection aborts on a scripted transport outage during the guarded
       sessionFile,
       localCwd,
       remoteCwd,
-      tmux: "-",
+      runtimeSession: "-",
       status: "up",
       createdAt: "t",
       updatedAt: "t",

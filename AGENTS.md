@@ -22,7 +22,7 @@ callers:
   Agent Sandbox pod (tar streams over exec, every argv pins
   context/namespace/kubeconfig); `local` is the hermetic test double and
   must stay behaviorally equivalent (same `~/` semantics).
-- `src/runtime/` — where the remote agent process lives (tmux).
+- `src/runtime/` — where the remote agent process lives (herdr).
 
 Commands (`src/commands/`) orchestrate the seams through the provider — no
 target-type branching outside the seams — and own the handoff record
@@ -31,7 +31,7 @@ lifecycle (`up → down/killed`) in `src/state.ts`.
 ## Commands
 
 ```bash
-bun test              # full suite, includes the live tmux round trip
+bun test              # full suite, includes the live herdr round trip
 bunx tsc --noEmit     # strict typecheck — zero errors, always
 bun run style         # Tiger Style gate — limits and forbidden forms
 bun src/cli.ts …      # run the CLI from source
@@ -90,9 +90,9 @@ macos.
    directories. Touching the real `~/.omp`, `~/.claude`, `~/.codex`, or
    `~/.beam` in a test is a bug.
 3. **No wall-clock timers in tests.** Await real signals. The one exception:
-   bounded polling of a genuinely external process (the tmux e2e), justified
+   bounded polling of a genuinely external process (the herdr e2e), justified
    with a comment.
-4. **`describe.skipIf` for missing system deps** (tmux/rsync) — skip, never
+4. **`describe.skipIf` for missing system deps** (herdr/rsync) — skip, never
    fail; CI installs them so nothing is skipped there.
 5. **Never change a test's expectations to make it pass** — fix the code.
 6. The e2e round trip (`test/e2e.test.ts`) is the merge gate: if it cannot
@@ -302,7 +302,7 @@ first draft.
 ### Dependencies and tooling
 
 1. **Zero dependencies** — adopt (TypeScript rule 1). System binaries (ssh,
-   rsync, tar, tmux, git, kubectl) are probed prerequisites, not
+   rsync, tar, herdr, git, kubectl) are probed prerequisites, not
    dependencies: `doctor` detects a missing one and names what to install.
 2. **One small standardized toolbox** — adopt: Bun and `tsc`, one subprocess
    primitive (`run`/`runChecked` in `src/util/shell.ts`), one style checker.

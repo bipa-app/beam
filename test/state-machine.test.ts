@@ -52,7 +52,7 @@ function tempEnv(): BeamEnv {
   return { home, beamDir: join(home, ".beam") };
 }
 
-const SPEC_A: TargetSpec = { type: "local", root: "/tmp/root-a", tmuxSocket: "sock-a" };
+const SPEC_A: TargetSpec = { type: "local", root: "/tmp/root-a" };
 
 function makeFor(target: string, localCwd: string, spec: TargetSpec = SPEC_A) {
   return (id: string): BeamRecord => {
@@ -64,7 +64,7 @@ function makeFor(target: string, localCwd: string, spec: TargetSpec = SPEC_A) {
       // Production semantics: the remote path is a pure function of
       // (target root, localCwd) — records for the same pair SHARE it.
       remoteCwd: `${spec.root}/${remoteWorkspaceName(localCwd)}`,
-      tmux: `beam-${id}`,
+      runtimeSession: `beam-${id}`,
       status: "provisioning",
       createdAt: now,
       updatedAt: now,
@@ -371,7 +371,7 @@ try {
           target,
           localCwd: cwd,
           remoteCwd: "/beam/ws-" + cwd.replaceAll("/", "-"), // production: derived from cwd, not id
-          tmux: "beam-" + id,
+          runtimeSession: "beam-" + id,
           status: "provisioning",
           createdAt: now,
           updatedAt: now,
@@ -1004,7 +1004,7 @@ describe("target recovery through persisted snapshots (config removed/renamed)",
       target: "old",
       localCwd: "/w",
       remoteCwd: "/r/ws",
-      tmux: "beam-legacy",
+      runtimeSession: "beam-legacy",
       status: "up",
       createdAt: now,
       updatedAt: now,

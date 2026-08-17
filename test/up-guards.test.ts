@@ -12,9 +12,12 @@
  *
  * Method: real `cmdUp`/`cmdKill`/`cmdLogin` over the local transport inside
  * hermetic BEAM_HOME/BEAM_DIR temp fixtures, with a stub `omp` (bare exit 0)
- * and tmux probes on a private socket; console output is captured by
- * wrapping console.log; suites needing tmux/rsync are `describe.skipIf`-
- * gated with an explicit 30s real-process timeout.
+ * and real-herdr liveness probes hitting the runtime's uid-scoped socket
+ * (`$TMPDIR/herdr-<uid>/<session>.sock`; registry under the fixture's
+ * remote HOME);
+ * console output is captured by wrapping console.log; suites needing
+ * herdr/rsync are `describe.skipIf`-gated with an explicit 30s
+ * real-process timeout.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
@@ -28,7 +31,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { cmdKill, cmdLogin } from "../src/commands/misc.ts";
 import { cmdUp } from "../src/commands/up.ts";
 import { resolveEnv, type BeamEnv } from "../src/env.ts";
@@ -41,11 +44,11 @@ import {
 } from "../src/state.ts";
 import { remoteWorkspaceName } from "../src/workspace.ts";
 
-const TMUX_SOCKET = `beamguard-${process.pid}`;
-const HAVE_DEPS = Bun.which("tmux") !== null && Bun.which("rsync") !== null;
+const HERDR = Bun.which("herdr");
+const HAVE_DEPS = HERDR !== null && Bun.which("rsync") !== null;
 
 // Explicit real-process budget for every gated test below: a local rsync
-// ship plus tmux probes — the same cost class e2e.test.ts budgets at 30s.
+// ship plus herdr probes — the same cost class e2e.test.ts budgets at 30s.
 const ROUND_TRIP_TIMEOUT_MS = 30_000;
 
 // fake omp: `beam login` runs it bare (exit 0 = done); --no-start means the
@@ -103,7 +106,13 @@ describe.skipIf(!HAVE_DEPS)(
   () => {
     beforeAll(() => {
       savedCwd = process.cwd();
-      for (const k of ["BEAM_HOME", "BEAM_DIR", "PATH"]) savedEnv[k] = process.env[k];
+      for (const k of ["BEAM_HOME", "BEAM_DIR", "PATH", "XDG_CONFIG_HOME"]) {
+        savedEnv[k] = process.env[k];
+      }
+      // herdr resolves its session REGISTRY from XDG_CONFIG_HOME before
+      // HOME; the transport pins HOME only, so an ambient XDG value would
+      // escape the fixture's remote home.
+      delete process.env.XDG_CONFIG_HOME;
 
       localHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-guards-home-")));
       remoteHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-guards-rhome-")));
@@ -128,7 +137,7 @@ describe.skipIf(!HAVE_DEPS)(
         JSON.stringify({
           defaultTarget: "sandbox",
           targets: {
-            sandbox: { type: "local", root: remoteRoot, home: remoteHome, tmuxSocket: TMUX_SOCKET },
+            sandbox: { type: "local", root: remoteRoot, home: remoteHome },
           },
         }),
       );
@@ -137,7 +146,9 @@ describe.skipIf(!HAVE_DEPS)(
       mkdirSync(fakeBin);
       writeFileSync(join(fakeBin, "omp"), FAKE_OMP);
       chmodSync(join(fakeBin, "omp"), 0o755);
-      process.env.PATH = `${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+      const herdrPrefix = HERDR === null ? "" : `${dirname(HERDR)}:`;
+      process.env.PATH =
+        `${fakeBin}:${herdrPrefix}/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
       process.env.BEAM_HOME = localHome;
       process.env.BEAM_DIR = beamDir;
       process.chdir(workDir);
@@ -290,7 +301,7 @@ describe("kill/login --help is inert", () => {
         target: "sandbox",
         localCwd: "/w",
         remoteCwd: "/r/ws",
-        tmux: "beam-livekl",
+        runtimeSession: "beam-livekl",
         status: "up",
         createdAt: now,
         updatedAt: now,

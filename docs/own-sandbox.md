@@ -83,24 +83,24 @@ An e2-standard-8 costs real money while running. Stop it when idle
 start/stop around handoffs is exactly what the provider seam is for
 (`type: "gce"` provider: start on `beam up`, stop on `beam down`).
 
-### Optional: herdr as the agent runtime
+### herdr, the agent runtime
 
-[herdr](https://github.com/herdrdev/herdr) is a Rust daemon that owns agent
-terminals: sessions survive disconnects and reboots, every pane is marked
-**working / blocked / idle**, and a socket API exposes that state. Installed
-on the sandbox, it is a strictly better home for beamed agents than raw
-tmux — reattach into a dashboard of your handoffs instead of a bare pane,
-and see at a glance whether the agent is stuck waiting for you. beam's
-Runtime seam (`src/runtime/`) is where a first-class `herdr` runtime plugs
-in; until then, herdr and beam's tmux sessions coexist fine on one VM.
+[herdr](https://github.com/herdrdev/herdr) is the Rust daemon that owns
+beam's remote agent terminals: sessions survive disconnects and reboots,
+every pane is marked **working / blocked / idle**, and a socket API exposes
+that state. beam's Runtime seam (`src/runtime/herdr.ts`) drives it — one
+named session per handoff — so reattaching lands in a dashboard of your
+handoffs instead of a bare pane, and you see at a glance whether the agent
+is stuck waiting for you. The bootstrap script installs the pinned release
+binary; it is a required server dependency, like rsync.
 
 ## 2. In-cluster pod + Tailscale (when it must live in Kubernetes)
 
 If the sandbox has to run inside an existing cluster, run a `beam-box`
-Deployment (Ubuntu + sshd + tmux + rsync) and reach it over a mesh VPN
+Deployment (Ubuntu + sshd + herdr + rsync) and reach it over a mesh VPN
 (e.g. a Tailscale sidecar) instead of the Kubernetes API:
 
-- ssh remains the data plane → rsync delta, tmux attach, `beam login`, and
+- ssh remains the data plane → rsync delta, herdr attach, `beam login`, and
   the privilege probes all work unchanged;
 - the tailnet ACL decides who can reach the pod — centrally managed,
   auditable, revocable;
