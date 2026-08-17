@@ -9,6 +9,7 @@
   },
   "scripts": {
     "beam": "bun src/cli.ts",
+    "style": "bun scripts/check-style.ts",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },

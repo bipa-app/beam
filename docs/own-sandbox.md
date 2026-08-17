@@ -111,16 +111,32 @@ gVisor (`runtimeClassName: gvisor`) hardens the pod if the node pool
 supports it. Pin the pod to a PVC-backed `/home` so workspaces and harness
 logins survive restarts.
 
-## 3. kubectl as the transport (last resort)
+## 3. kubectl as the transport (the `agent-sandbox` target)
 
-Driving `kubectl exec` as beam's data plane is possible and stays on the
-roadmap, but it is the weakest option for people: every user needs a
-kubeconfig, RBAC must be hand-scoped (the blast radius of a fat kubeconfig
-is the whole cluster), there is no rsync delta, and long interactive
-sessions ride the apiserver. Per this repo's security invariants, the
-kubectl transport only lands together with its RBAC bundle (dedicated
-namespace, pods/exec-only ServiceAccount, gVisor runtimeClass) and a doctor
-probe that refuses cluster-admin kubeconfigs.
+Driving `kubectl exec` as beam's data plane ships as the `agent-sandbox`
+target (GKE Agent Sandbox: one SandboxClaim per handoff, tar streams over
+the exec channel). It is still the weakest option for *people*: every user
+needs a kubeconfig, RBAC must be hand-scoped (the blast radius of a fat
+kubeconfig is the whole cluster), there is no rsync delta, and long
+interactive sessions ride the apiserver. Per this repo's security
+invariants it ships with teeth: a dedicated per-user namespace, a
+ServiceAccount scoped to claim lifecycle + pods/exec in that namespace
+only, an explicit `kubeconfig` REQUIRED in the target config (the ambient
+one is never used), and a fail-closed boundary check in both `beam doctor`
+and `beam up` that REFUSES credentials holding known escape capabilities —
+cluster-wide claim create/list/delete or exec access, port-forward
+anywhere, Secret access of any kind
+(get/list/watch/create/patch/update/delete/deletecollection), plain pod create,
+pod patch/update, pods/attach,
+ephemeral-container injection, Sandbox/SandboxTemplate mutation, workload
+controller create/patch/update, token minting, RBAC bind/escalate,
+impersonation — or whose capabilities cannot be verified at all (a
+denylist of escape hatches, not proof of minimality). beam's purge erases the
+shipped workspace and installed session files inside the pod before the
+claim is deleted — claim deletion is never trusted as storage erasure.
+Whether harness *logins* survive claim deletion is template-dependent
+(ephemeral pod vs persistent home). See the README's configuration section
+for the target JSON.
 
 ## Managed providers
 

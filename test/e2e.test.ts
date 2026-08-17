@@ -1,3 +1,18 @@
+/**
+ * Goal: the full round trip over the local transport proves up → remote
+ * work → down fidelity (the merge gate): `beam up` mirrors the workspace,
+ * installs the session with its header cwd rewritten, and resumes a fake
+ * `omp` inside a private tmux server with the kickoff passed; the remote
+ * agent appends to the transcript and creates a file; `beam down` stops
+ * the agent and verifies the workspace AND the grown transcript into a
+ * persisted return stage, leaving the live workspace and session store
+ * untouched and resumable straight off the returned path.
+ *
+ * Method: real `cmdUp`/`cmdDown` against a LocalTransport, a bash fake-omp
+ * on a private `tmux -L` socket, and hermetic BEAM_HOME/BEAM_DIR fixtures;
+ * `describe.skipIf` skips when tmux/rsync are absent, and a bounded poll
+ * with an explicit timeout awaits the genuinely external tmux agent.
+ */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
@@ -16,16 +31,7 @@ import { cmdUp } from "../src/commands/up.ts";
 import { loadState } from "../src/state.ts";
 import { resolveEnv } from "../src/env.ts";
 import { remoteWorkspaceName } from "../src/workspace.ts";
-import { run } from "../src/util/shell.ts";
-
-/**
- * Full round trip over the local transport:
- *   beam up  -> workspace mirrored, session installed (header cwd rewritten),
- *               fake `omp` resumed inside a private tmux server, kickoff passed
- *   (remote agent appends to the transcript and creates a file)
- *   beam down -> agent stopped, workspace synced back, transcript re-imported
- *               with header cwd restored, backup written
- */
+import { run, shq } from "../src/util/shell.ts";
 
 const TMUX_SOCKET = `beamtest-${process.pid}`;
 const HAVE_DEPS = Bun.which("tmux") !== null && Bun.which("rsync") !== null;
@@ -35,6 +41,9 @@ const FAKE_OMP = `#!/bin/bash
 file="$2"
 msg="\${3:-no-kickoff}"
 printf '{"type":"message","from":"remote-agent","text":"%s"}\\n' "$msg" >> "$file"
+# real omp writes a sibling artifacts dir next to the transcript
+mkdir -p "\${file%.jsonl}"
+echo "artifact-blob" > "\${file%.jsonl}/note.txt"
 echo "made-remotely" > remote-artifact.txt
 sleep 300
 `;
@@ -125,12 +134,16 @@ describe.skipIf(!HAVE_DEPS)("beam up/down round trip (local transport)", () => {
       expect(record.remoteCwd).toBe(remoteCwd);
 
       // The fake agent runs as a real external process in a tmux pane; fake
-      // timers cannot advance it, so poll the file it writes (bounded).
+      // timers cannot advance it, so poll for its LAST write (bounded) —
+      // once remote-artifact.txt exists, the transcript append and the
+      // artifacts dir are already on disk.
       const deadline = Date.now() + 10_000;
       let transcript = "";
       while (Date.now() < deadline) {
         transcript = readFileSync(join(remoteCwd, ".beam", "session.jsonl"), "utf8");
-        if (transcript.includes("remote-agent")) break;
+        if (transcript.includes("remote-agent")) {
+          if (existsSync(join(remoteCwd, "remote-artifact.txt"))) break;
+        }
         await Bun.sleep(200);
       }
       expect(transcript).toContain('"from":"remote-agent"');
@@ -141,39 +154,64 @@ describe.skipIf(!HAVE_DEPS)("beam up/down round trip (local transport)", () => {
   );
 
   test(
-    "down stops the agent, syncs back, and re-imports the transcript",
+    "down stops the agent, stages workspace AND session returns durably, and never" +
+      " touches local stores",
     async () => {
+      const storeBefore = readFileSync(storeFile, "utf8");
       await cmdDown([]);
 
-      // remote work arrived in the local workspace
-      expect(readFileSync(join(workDir, "remote-artifact.txt"), "utf8")).toBe("made-remotely\n");
-
-      // transcript re-imported with header cwd restored, remote message kept
-      const store = readFileSync(storeFile, "utf8");
-      expect(JSON.parse(store.split("\n")[0]!).cwd).toBe(workDir);
-      expect(store).toContain('"from":"remote-agent"');
-      expect(store).toContain("local work so far");
-
-      // previous transcript backed up
-      const backups = readdirSync(join(localHome, ".omp", "agent", "sessions", "-work-app")).filter(
-        (n) => n.includes(".bak-"),
-      );
-      expect(backups.length).toBe(1);
-
       const record = loadState(resolveEnv()).records[0]!;
-      expect(record.status).toBe("down");
+      const txn = readdirSync(join(beamDir, "returns", record.id)).sort().at(-1)!;
+      const stagedWorkspace = join(beamDir, "returns", record.id, txn, "workspace");
+      // Remote work is in the verified stage; the live workspace was never
+      // pointed at by the return transport.
+      expect(existsSync(join(workDir, "remote-artifact.txt"))).toBe(false);
+      expect(
+        readFileSync(join(stagedWorkspace, "remote-artifact.txt"), "utf8"),
+      ).toBe("made-remotely\n");
+
+      // The session return shares the same txn root: grown transcript with
+      // the header localized for local resume, artifacts alongside.
+      expect(record.collect).toBeDefined();
+      const returnDir = record.collect!.returnDir;
+      expect(returnDir).toBe(join(beamDir, "returns", record.id, txn, "session"));
+      const returned = readFileSync(join(returnDir, "session.jsonl"), "utf8");
+      expect(JSON.parse(returned.split("\n")[0]!).cwd).toBe(workDir);
+      expect(returned).toContain('"from":"remote-agent"');
+      expect(returned).toContain("local work so far");
+      // remote-created artifacts (none existed locally) came back in the return
+      expect(
+        readFileSync(join(returnDir, "artifacts", "note.txt"), "utf8"),
+      ).toBe("artifact-blob\n");
+      // the hint resumes straight off the durable return
+      expect(record.collect!.hint).toBe(`omp --resume ${shq(join(returnDir, "session.jsonl"))}`);
+
+      // The local harness store was NEVER touched: same bytes, no backups,
+      // no artifacts imported next to it.
+      expect(readFileSync(storeFile, "utf8")).toBe(storeBefore);
+      const storeEntries = readdirSync(join(localHome, ".omp", "agent", "sessions", "-work-app"));
+      expect(storeEntries.filter((n) => n.includes(".bak-"))).toEqual([]);
+      expect(existsSync(storeFile.slice(0, -".jsonl".length))).toBe(false);
+
+      expect(record.status).toBe("up");
 
       // agent session is gone from the private tmux server
       const has = await run(["tmux", "-L", TMUX_SOCKET, "has-session", "-t", `=${record.tmux}`]);
       expect(has.code).not.toBe(0);
 
-      // the remote mirror (secrets included) is purged once everything is home
-      expect(existsSync(join(remoteRoot, remoteWorkspaceName(workDir)))).toBe(false);
+      // Down is non-destructive: the verified remote mirror stays available
+      // for another collection until an explicit `beam kill --purge`.
+      expect(existsSync(join(remoteRoot, remoteWorkspaceName(workDir)))).toBe(true);
     },
     30_000,
   );
 
-  test("down without a session round trip fails loudly, not silently", async () => {
-    expect(existsSync(join(workDir, ".beam", "session.jsonl"))).toBe(true);
-  });
+  test("beam-reserved scratch never lands in the local workspace — the transcript" +
+    " lives in the store", () => {
+    // The grown transcript was fetched over the transport's file channel
+    // into the durable return stage; the filtered mirror never carries
+    // `.beam`, so no stale scratch is left behind to shadow a future
+    // handoff's state.
+    expect(existsSync(join(workDir, ".beam"))).toBe(false);
+  }, 30_000);
 });

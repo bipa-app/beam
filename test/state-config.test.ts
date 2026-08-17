@@ -1,10 +1,24 @@
+/**
+ * Goal: state-file and target-config boundary regressions — record lookup
+ * and update semantics, target resolution errors, malformed `state.json`
+ * shapes refused with a recovery path instead of being treated as empty,
+ * and runtime discriminant checks that reject persisted target types no
+ * beam release ever wrote.
+ *
+ * Method: exercise the pure config/state seams (`loadConfig`,
+ * `resolveTarget`, `loadState`, `addRecord`/`findRecord`/`updateRecord`,
+ * `createProvider`/`createTransport`) against fixture `BEAM_HOME`
+ * directories built under mkdtemp — no real user state is read or written.
+ */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, resolveTarget } from "../src/config.ts";
+import { loadConfig, resolveTarget, type LocalTargetSpec, type TargetSpec } from "../src/config.ts";
 import type { BeamEnv } from "../src/env.ts";
-import { addRecord, findRecord, updateRecord, type BeamRecord } from "../src/state.ts";
+import { createProvider } from "../src/provider/index.ts";
+import { addRecord, findRecord, loadState, updateRecord, type BeamRecord } from "../src/state.ts";
+import { createTransport } from "../src/transport/index.ts";
 
 function tempEnv(): BeamEnv {
   const home = mkdtempSync(join(tmpdir(), "beam-state-"));
@@ -85,7 +99,59 @@ describe("target resolution", () => {
     const env = tempEnv();
     mkdirSync(env.beamDir, { recursive: true });
     expect(loadConfig(env).targets).toEqual({});
-    writeFileSync(join(env.beamDir, "config.json"), `{"defaultTarget":"x","targets":{"x":{"type":"local","root":"/r"}}}`);
+    writeFileSync(
+      join(env.beamDir, "config.json"),
+      `{"defaultTarget":"x","targets":{"x":{"type":"local","root":"/r"}}}`,
+    );
     expect(resolveTarget(loadConfig(env)).name).toBe("x");
+  });
+});
+
+describe("state file read boundary", () => {
+  function writeState(env: BeamEnv, bytes: string): void {
+    mkdirSync(env.beamDir, { recursive: true });
+    writeFileSync(join(env.beamDir, "state.json"), bytes);
+  }
+
+  test("a well-formed state file still loads", () => {
+    const env = tempEnv();
+    writeState(env, `{"records": []}`);
+    expect(loadState(env).records).toEqual([]);
+  });
+
+  test("a records field that is not an array is refused with a recovery path", () => {
+    const env = tempEnv();
+    writeState(env, `{"records": "nope"}`);
+    expect(() => loadState(env)).toThrow(/"records" is not an array/);
+    expect(() => loadState(env)).toThrow(/restore it from a backup, or delete it/);
+  });
+
+  test("a top-level shape without a records object is refused, never treated as empty", () => {
+    const env = tempEnv();
+    for (const bytes of ["[]", "null", `"records"`, "42"]) {
+      writeState(env, bytes);
+      expect(() => loadState(env)).toThrow(/restore it from a backup, or delete it/);
+    }
+  });
+
+  test("unparseable state bytes are refused with the same recovery path", () => {
+    const env = tempEnv();
+    writeState(env, `{"records": [`);
+    expect(() => loadState(env)).toThrow(/not valid JSON/);
+    expect(() => loadState(env)).toThrow(/restore it from a backup, or delete it/);
+  });
+});
+
+describe("runtime discriminant boundaries", () => {
+  test("createTransport refuses a persisted target type no beam release wrote", () => {
+    const spec = { type: "teleport", root: "/r" } as unknown as LocalTargetSpec;
+    expect(() => createTransport(spec)).toThrow(/beam \(invariant\)/);
+    expect(() => createTransport(spec)).toThrow(/teleport/);
+  });
+
+  test("createProvider refuses an unknown target type instead of guessing a provider", () => {
+    const spec = { type: "teleport", root: "/r" } as unknown as TargetSpec;
+    expect(() => createProvider(spec)).toThrow(/beam \(invariant\)/);
+    expect(() => createProvider(spec)).toThrow(/teleport/);
   });
 });
