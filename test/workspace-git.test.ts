@@ -289,8 +289,15 @@ describe.skipIf(!HAVE_DEPS)("materializeWorktreeGit", () => {
     expect((await git(remote, "config", "beam.note")).stdout).toBe("line one\nline two\n");
     const multi = (await git(remote, "config", "--get-all", "beam.multi")).stdout;
     expect(multi).toBe("first\nsecond\n");
-    expect((await run(["git", "-C", remote, "config", "core.hooksPath"])).code).not.toBe(0);
-    expect((await run(["git", "-C", remote, "config", "safe.directory"])).code).not.toBe(0);
+    // --local: CI runners set safe.directory in the GLOBAL config
+    // (actions/checkout), and an unscoped lookup reads every scope — the
+    // assertion is about what traveled in the shipped repo config only.
+    expect((await run(["git", "-C", remote, "config", "--local", "core.hooksPath"])).code).not.toBe(
+      0,
+    );
+    expect(
+      (await run(["git", "-C", remote, "config", "--local", "safe.directory"])).code,
+    ).not.toBe(0);
   }
 
   /**
@@ -4408,9 +4415,19 @@ describe.skipIf(!HAVE_DEPS)(
       const alien = join(f.base, "alien");
       mkdirSync(alien);
       await git(alien, "init", "-q", "-b", "main");
+      // CI runner git may detach background gc/maintenance after the
+      // commit, leaving a transient *.lock the collect-side lockscan would
+      // refuse on (exit 79) before the identity check under test runs —
+      // disable it and sweep any leftover lock before installing the repo.
+      await git(alien, "config", "gc.auto", "0");
+      await git(alien, "config", "gc.autoDetach", "false");
+      await git(alien, "config", "maintenance.auto", "false");
       writeFileSync(join(alien, "seed.txt"), "unrelated\n");
       await git(alien, "add", "-A");
       await git(alien, "commit", "-q", "-m", "unrelated");
+      for (const file of walk(join(alien, ".git"))) {
+        if (file.endsWith(".lock")) rmSync(file);
+      }
       renameSync(join(alien, ".git"), payloadOf(record));
 
       const before = localState(localCwd, f.commonGit);

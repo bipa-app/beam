@@ -572,9 +572,21 @@ export class KubectlTransport implements Transport {
         opts.owned === undefined
           ? step.pinExisting
           : ownedDestPrelude(step.remoteDir, opts.owned, { create: true });
+      // Nested reserved destinations are 0700 regardless of umask, but tar
+      // restores the archive's `./` directory mode over the descent's chmod
+      // (GNU tar does; bsdtar does not), so the shell re-tightens and
+      // re-verifies after extraction — same policy as the ssh and local
+      // transports (root transfers never chmod the user-owned workspace
+      // root).
+      const tighten =
+        opts.owned !== undefined && ownedRelFromRoot(step.remoteDir, opts.owned).length > 0
+          ? "\nchmod 700 . || { echo 'beam: cannot restore the reserved dir mode' >&2; exit 66; }" +
+            '\n[ -n "$(find . -prune -perm 700)" ]' +
+            " || { echo 'beam: the reserved dir mode did not verify' >&2; exit 66; }"
+          : "";
       await this.pipeline(
         ["tar", "-czf", "-", ...(opts.verbose ? ["-v"] : []), "-C", staging, "."],
-        this.execArgv(`set -e\n${prelude}\n/usr/bin/tar -xzf - -C .`, { stdin: true }),
+        this.execArgv(`set -e\n${prelude}\n/usr/bin/tar -xzf - -C .${tighten}`, { stdin: true }),
         opts.verbose === true,
       );
     } finally {

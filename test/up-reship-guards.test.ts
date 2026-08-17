@@ -38,14 +38,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { cmdUp } from "../src/commands/up.ts";
 import { cmdDown } from "../src/commands/down.ts";
 import { resolveEnv } from "../src/env.ts";
 import { loadState, updateRecord, type BeamRecord } from "../src/state.ts";
 import { LocalTransport } from "../src/transport/local.ts";
 import type { SyncOptions } from "../src/transport/types.ts";
-import { run, runChecked } from "../src/util/shell.ts";
+import { run, runChecked, shq } from "../src/util/shell.ts";
 import {
   collectedGitTreeFingerprint,
   gitPayloadPath,
@@ -1000,6 +1000,15 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
     writeFileSync(join(fakeBin, "omp"), "#!/bin/bash\nexit 0\n");
     chmodSync(join(fakeBin, "omp"), 0o755);
     process.env.PATH = `${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+    // LocalTransport execs through `bash -lc`, and a macOS login shell runs
+    // path_helper, which reorders PATH so /etc/paths.d entries (Homebrew on
+    // CI runners) jump ahead of fakeBin — the real tmux would shadow the
+    // fake one. The transport pins HOME at the target home, so a profile
+    // there re-prepends fakeBin after path_helper has run, on every OS.
+    writeFileSync(
+      join(dirname(iso.remoteRoot), ".bash_profile"),
+      `export PATH=${shq(fakeBin)}:"$PATH"\n`,
+    );
     process.chdir(ws);
     return { iso, ws, sessionFile, artifactsDir, fakeBin, savedPath };
   }
