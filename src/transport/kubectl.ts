@@ -398,7 +398,7 @@ export class KubectlTransport implements Transport {
    * kubectl exec collapses failure classes: a remote command exiting 1 and
    * kubectl itself failing (API server unreachable, pod gone, exec stream
    * torn down mid-flight) can both surface locally as exit 1. Callers that
-   * interpret exit codes — tmux liveness, `exists`, the sync-marker probe —
+   * interpret exit codes — herdr liveness, `exists`, the sync-marker probe —
    * must never read an API failure as a clean remote "no", so every
    * non-interactive exec wraps the command with a per-call sentinel trailer:
    *

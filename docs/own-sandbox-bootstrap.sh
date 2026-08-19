@@ -6,7 +6,13 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y tmux rsync git curl unzip build-essential pkg-config
+apt-get install -y rsync git curl unzip build-essential pkg-config
+
+# herdr — beam's remote agent runtime (pinned release binary).
+HERDR_VERSION="v0.8.0"
+curl -fsSL -o /usr/local/bin/herdr \
+  "https://github.com/herdrdev/herdr/releases/download/${HERDR_VERSION}/herdr-linux-x86_64"
+chmod +x /usr/local/bin/herdr
 
 # Docker (optional — remove if the projects you beam never need it).
 # NOTE: docker-group membership is root-equivalent on this VM; an admin adds

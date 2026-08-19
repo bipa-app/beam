@@ -29,7 +29,7 @@ import type { CollectReceipt } from "./session/collect-txn.ts";
  * in-flight phases that still own remote resources (and hold the target
  * reservation); only `up` is a completed live handoff.
  *
- * - `starting` is journaled before remote tmux starts, so a retried
+ * - `starting` is journaled before the remote runtime starts, so a retried
  *   `beam up` finalizes instead of re-shipping.
  * - `killing` is journaled by `beam kill --purge` once checked remote
  *   erasure is complete; retry repeats provider destroy only.
@@ -56,7 +56,8 @@ export interface BeamRecord {
   artifactsDir?: string;
   localCwd: string;
   remoteCwd: string;
-  tmux: string;
+  /** Name of the handoff's herdr session on the target (`beam-<id>`). */
+  runtimeSession: string;
   status: BeamStatus;
   createdAt: string;
   updatedAt: string;
@@ -70,7 +71,7 @@ export interface BeamRecord {
   /**
    * Snapshot of the target spec this handoff was created against. Every
    * later operation (repeated up, down, status, attach, kill, login) binds
-   * through it, so editing the config (type/root/template/tmuxSocket) can
+   * through it, so editing the config (type/root/template) can
    * never retarget a live handoff. Absent only on records written by older
    * beams; remote operations refuse those (`recordSpec`) — the current
    * config cannot prove where they live. Read-only listings label them.
@@ -250,7 +251,15 @@ export function loadState(env: BeamEnv): StateFile {
   }
   // Per-record fields are trusted past this boundary: state.json is
   // beam-private (0600, atomic rename) and record discriminants are still
-  // checked where they are switched on.
+  // checked where they are switched on. One read-time migration: records
+  // written before the herdr runtime named the session field `tmux`.
+  for (const record of records) {
+    if (typeof record !== "object" || record === null) continue;
+    const rec = record as Record<string, unknown>;
+    if (rec.runtimeSession === undefined && typeof rec.tmux === "string") {
+      rec.runtimeSession = rec.tmux;
+    }
+  }
   return { records: records as BeamRecord[] };
 }
 
@@ -660,7 +669,7 @@ export function recordSpec(record: BeamRecord): TargetSpec {
     `handoff ${record.id} predates recorded target specs, so target "${record.target}" ` +
       `in the current config cannot be proven to be the machine it shipped to — ` +
       `beam refuses to touch a remote through it. Finish it manually on its original host ` +
-      `(tmux kill-session -t ${record.tmux}; remove ${record.remoteCwd} if unwanted), ` +
+      `(herdr session delete ${record.runtimeSession}; remove ${record.remoteCwd} if unwanted), ` +
       `then delete its entry from state.json in the beam dir`,
   );
 }

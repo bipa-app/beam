@@ -17,7 +17,7 @@
  * Method: real `cmdUp`/`cmdDown` over a LocalTransport against fixture
  * linked-worktree repositories and scripted remote states (in-progress
  * merge/sequencer files, hard links, symlinks) under mkdtemp BEAM_HOME
- * fixtures; suites are `describe.skipIf`-gated on git/rsync/tmux with
+ * fixtures; suites are `describe.skipIf`-gated on git/rsync/herdr with
  * explicit per-test timeouts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -65,8 +65,22 @@ import {
   workspacePublishTestSeam,
 } from "../src/workspace.ts";
 
+const HERDR = Bun.which("herdr");
 const HAVE_DEPS =
-  Bun.which("git") !== null && Bun.which("rsync") !== null && Bun.which("tmux") !== null;
+  Bun.which("git") !== null && Bun.which("rsync") !== null && HERDR !== null;
+
+/**
+ * The same uid-scoped socket path the runtime's emitted scripts compute
+ * (`${TMPDIR:-/tmp}/herdr-<uid>/<name>.sock`) — probes and cleanups MUST
+ * pin it via HERDR_SOCKET_PATH or they'd look for a fixture's server at
+ * herdr's HOME-derived default and never see it. The dir is uid-global and
+ * shared across fixtures; beam-<id> session names keep entries disjoint.
+ */
+function herdrSocketEnv(name: string): Record<string, string> {
+  const dir = join(process.env.TMPDIR ?? "/tmp", `herdr-${process.getuid!()}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return { HERDR_SESSION: name, HERDR_SOCKET_PATH: join(dir, `${name}.sock`) };
+}
 
 const GIT_ENV = {
   GIT_AUTHOR_NAME: "t",
@@ -121,7 +135,11 @@ interface IsolatedBeam {
 function isolatedBeam(tag: string): IsolatedBeam {
   const savedCwd = process.cwd();
   const savedEnv: Record<string, string | undefined> = {};
-  for (const k of ["BEAM_HOME", "BEAM_DIR"]) savedEnv[k] = process.env[k];
+  for (const k of ["BEAM_HOME", "BEAM_DIR", "XDG_CONFIG_HOME"]) savedEnv[k] = process.env[k];
+  // herdr resolves its session REGISTRY from XDG_CONFIG_HOME before HOME;
+  // the transport pins HOME only, so an ambient XDG value would escape
+  // the fixture's remote home.
+  delete process.env.XDG_CONFIG_HOME;
   const beamHome = realpathSync(mkdtempSync(join(tmpdir(), `beam-${tag}-home-`)));
   const remoteHome = realpathSync(mkdtempSync(join(tmpdir(), `beam-${tag}-rhome-`)));
   const remoteRoot = join(remoteHome, "beam-root");
@@ -279,6 +297,29 @@ describe.skipIf(!HAVE_DEPS)(
       restoreBeam(iso);
     });
 
+    /**
+     * Remote manifest with the runtime's launcher script factored out —
+     * the only remote artifact an in-place agent restart writes (asserted
+     * present before it is dropped).
+     */
+    function manifestSansLauncher(dir: string): Map<string, string> {
+      const m = remoteManifest(dir);
+      expect(m.delete(".beam/agent-start.sh")).toBe(true);
+      return m;
+    }
+
+    /**
+     * Stop (checked) and delete a handoff's herdr session: the server
+     * binds the uid-scoped socket, so the stop is `server stop` under
+     * HERDR_SOCKET_PATH (`session stop` only reaches HOME-registry
+     * sockets); the registry entry lives under the fixture remote home.
+     */
+    async function stopFixtureSession(remoteHome: string, session: string): Promise<void> {
+      const env = { HOME: remoteHome, ...herdrSocketEnv(session) };
+      await runChecked([HERDR!, "server", "stop"], { env });
+      await run([HERDR!, "session", "delete", session, "--json"], { env });
+    }
+
     test(
       "an in-progress local merge refuses the retry before provisioning or liveness, leaking" +
         " nothing",
@@ -296,14 +337,21 @@ describe.skipIf(!HAVE_DEPS)(
         // A local operation begins before the retry…
         await beginConflictMerge(f.wt);
 
-        // …and the first remote act after provisioning — the tmux liveness
+        // …and the first remote act after provisioning — the herdr liveness
         // probe — is booby-trapped with a shim that cannot answer. If the
         // retry reached ANY remote step (provision is inert on a static
         // target), it would die with the probe error, not the local guard's.
         const fakeBin = join(f.base, "fakebin");
         mkdirSync(fakeBin, { recursive: true });
-        writeFileSync(join(fakeBin, "tmux"), "#!/bin/bash\nexit 42\n");
-        chmodSync(join(fakeBin, "tmux"), 0o755);
+        writeFileSync(join(fakeBin, "herdr"), "#!/bin/bash\nexit 42\n");
+        chmodSync(join(fakeBin, "herdr"), 0o755);
+        // macOS login shells run path_helper, which can demote fakeBin below
+        // system dirs; the transport pins HOME at the target home, so a
+        // profile there re-prepends fakeBin after path_helper has run.
+        writeFileSync(
+          join(dirname(iso.remoteRoot), ".bash_profile"),
+          `export PATH=${shq(fakeBin)}:"$PATH"\n`,
+        );
         process.env.PATH = `${fakeBin}:${process.env.PATH}`;
 
         const temps = materializerTemps();
@@ -322,6 +370,9 @@ describe.skipIf(!HAVE_DEPS)(
         // final `up` write): the retry fails closed instead of adopting a
         // landing it cannot prove, and the remote stays byte-identical.
         await git(f.wt, "merge", "--abort");
+        // Unplant the shim everywhere the transport resolves it: the retry
+        // below must reach the REAL herdr for an answerable liveness probe.
+        rmSync(join(fakeBin, "herdr"));
         process.env.PATH = savedPath!;
         await expect(cmdUp(["--no-session"])).rejects.toThrow(/cannot prove it landed/);
         expect(theRecord().status).toBe("provisioning");
@@ -426,16 +477,19 @@ describe.skipIf(!HAVE_DEPS)(
           expect(remoteManifest(remoteCwd)).toEqual(manifest);
 
           // Retained `up` + dead agent + journaled resume argv: restart IN
-          // PLACE — still not one remote byte moves (lock included).
+          // PLACE — the ONLY remote delta is the runtime's launcher script
+          // under beam's reserved scratch dir; not one workspace byte moves
+          // (lock included).
           updateRecord(resolveEnv(), shipped.id, { resumeArgv: ["true"] });
           writeFileSync(join(f3.wt, "newer-local.txt"), "stays local\n");
           await cmdUp(["--no-session"]);
           expect(theRecord().status).toBe("up");
-          expect(remoteManifest(remoteCwd)).toEqual(manifest);
+          expect(manifestSansLauncher(remoteCwd)).toEqual(manifest);
           // The pane drops into a shell after the agent exits (by design), so
-          // the tmux session survives the fake agent — kill it to simulate
-          // the dead agent the next leg needs.
-          await run(["tmux", "kill-session", "-t", `beam-${shipped.id}`]);
+          // the herdr session survives the fake agent — stop its per-session
+          // server to simulate the dead agent the next leg needs.
+          await stopFixtureSession(dirname(iso3.remoteRoot), shipped.runtimeSession);
+          const manifestWithLauncher = remoteManifest(remoteCwd);
 
           // Provisioning retry with the pointer landed: the writer has since
           // mutated the payload (MERGE_HEAD, index), so the journaled
@@ -456,7 +510,7 @@ describe.skipIf(!HAVE_DEPS)(
           await expect(cmdUp(["--no-session"])).rejects.toThrow(
             /live Git lock|does not match its journal|cannot be proven complete/,
           );
-          expect(remoteManifest(remoteCwd)).toEqual(manifest); // refusal moved nothing
+          expect(remoteManifest(remoteCwd)).toEqual(manifestWithLauncher); // refusal moved nothing
         } finally {
           restoreBeam(iso3);
         }
@@ -971,7 +1025,7 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
   /**
    * Git workspace under BEAM_HOME with one omp session — transcript plus
    * the sibling artifacts tree real omp stores keep — and a fake omp
-   * binary so the resume argv exits instantly inside tmux.
+   * binary so the resume argv exits instantly inside the herdr pane.
    */
   async function makeSessionFixture(tag: string): Promise<SessFixture> {
     const iso = isolatedBeam(tag);
@@ -999,10 +1053,12 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
     mkdirSync(fakeBin, { recursive: true });
     writeFileSync(join(fakeBin, "omp"), "#!/bin/bash\nexit 0\n");
     chmodSync(join(fakeBin, "omp"), 0o755);
-    process.env.PATH = `${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+    const herdrPrefix = HERDR === null ? "" : `${dirname(HERDR)}:`;
+    process.env.PATH =
+      `${fakeBin}:${herdrPrefix}/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
     // LocalTransport execs through `bash -lc`, and a macOS login shell runs
     // path_helper, which reorders PATH so /etc/paths.d entries (Homebrew on
-    // CI runners) jump ahead of fakeBin — the real tmux would shadow the
+    // CI runners) jump ahead of fakeBin — a system-dir herdr would shadow a
     // fake one. The transport pins HOME at the target home, so a profile
     // there re-prepends fakeBin after path_helper has run, on every OS.
     writeFileSync(
@@ -1013,7 +1069,19 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
     return { iso, ws, sessionFile, artifactsDir, fakeBin, savedPath };
   }
 
-  function restoreSessionFixture(f: SessFixture): void {
+  async function restoreSessionFixture(f: SessFixture): Promise<void> {
+    // Best-effort: a test that started a REAL herdr session (or failed
+    // mid-way) leaks its server on the uid-scoped socket — stop it there
+    // (`session stop` never reaches the override socket) and delete every
+    // recorded session's registry entry under the fixture's remote home.
+    if (HERDR !== null) {
+      const fixtureHome = dirname(f.iso.remoteRoot);
+      for (const record of loadState(resolveEnv()).records) {
+        const env = { HOME: fixtureHome, ...herdrSocketEnv(record.runtimeSession) };
+        await run([HERDR, "server", "stop"], { env });
+        await run([HERDR, "session", "delete", record.runtimeSession, "--json"], { env });
+      }
+    }
     process.env.PATH = f.savedPath;
     restoreBeam(f.iso);
   }
@@ -1027,22 +1095,25 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
 
   /**
    * Force the REAL crash-after-land window — nothing hand-built: run a
-   * full sessioned up whose agent start fails (a broken tmux planted on
-   * PATH; `has-session` still emits tmux's proves-absence diagnostic so
-   * the retry's liveness probe answers instead of throwing), leaving
-   * `starting` + the pending journal + its staged bundle exactly as the
-   * crashed attempt wrote them, then demote the status to `provisioning`
-   * — the same record shape a crash between the pointer landing and the
-   * `up` flip leaves behind.
+   * full sessioned up whose agent start fails (a broken herdr planted on
+   * PATH; `pane list` still emits the machine-readable server_not_running
+   * error so the retry's liveness probe answers instead of throwing),
+   * leaving `starting` + the pending journal + its staged bundle exactly
+   * as the crashed attempt wrote them, then demote the status to
+   * `provisioning` — the same record shape a crash between the pointer
+   * landing and the `up` flip leaves behind.
    */
   async function crashAfterLand(f: SessFixture): Promise<BeamRecord> {
     writeFileSync(
-      join(f.fakeBin, "tmux"),
+      join(f.fakeBin, "herdr"),
       `#!/bin/bash\n` +
-        `if [ "$1" = "has-session" ]; then echo "can't find session: crash-lever" >&2; fi\n` +
+        `if [ "$1" = "pane" ] && [ "$2" = "list" ]; then\n` +
+        `  echo '{"id":"cli:pane:list","error":{"code":"server_not_running",` +
+        `"message":"crash-lever"}}' >&2\n` +
+        `fi\n` +
         `exit 1\n`,
     );
-    chmodSync(join(f.fakeBin, "tmux"), 0o755);
+    chmodSync(join(f.fakeBin, "herdr"), 0o755);
     await expect(cmdUp([])).rejects.toThrow();
     const rec = theRecord();
     expect(rec.status).toBe("starting"); // install completed; the start crashed
@@ -1102,7 +1173,7 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
         // The completed ship reaped its bundle stage.
         expect(existsSync(join(resolveEnv().beamDir, "ship-stage", rec.id))).toBe(false);
       } finally {
-        restoreSessionFixture(f);
+        await restoreSessionFixture(f);
       }
     },
     120_000,
@@ -1129,7 +1200,7 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
         // Crash paths retain the stage.
         expect(existsSync(join(stage, "transcript.jsonl"))).toBe(true);
       } finally {
-        restoreSessionFixture(f);
+        await restoreSessionFixture(f);
       }
     },
     120_000,
@@ -1146,7 +1217,7 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
         expect(shipped.status).toBe("up");
         expect(shipped.resumeArgv).toBeDefined(); // journaled with `starting`
 
-        // The crash window: tmux ran (fake omp exited instantly), the
+        // The crash window: herdr ran (fake omp exited instantly), the
         // record still says `starting`. The retry finalizes — no mirror,
         // no payload, no session install, nothing.
         updateRecord(resolveEnv(), shipped.id, { status: "starting" });
@@ -1157,7 +1228,7 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
         expect(remoteManifest(rc)).toEqual(before);
         expect(existsSync(join(rc, "newer-local.txt"))).toBe(false);
       } finally {
-        restoreSessionFixture(f);
+        await restoreSessionFixture(f);
       }
     },
     120_000,

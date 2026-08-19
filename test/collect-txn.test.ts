@@ -61,7 +61,7 @@ function makeRecord(
   const record: BeamRecord = {
     id: "r1",
     target: "t",
-    tmux: "-",
+    runtimeSession: "-",
     status: "up",
     createdAt: "t",
     updatedAt: "t",

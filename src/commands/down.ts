@@ -14,7 +14,7 @@ import {
   type BeamRecord,
 } from "../state.ts";
 import { createProvider } from "../provider/index.ts";
-import { TmuxRuntime } from "../runtime/tmux.ts";
+import { HerdrRuntime } from "../runtime/herdr.ts";
 import type { Transport } from "../transport/index.ts";
 import {
   assertContainedWorkspace,
@@ -110,13 +110,13 @@ export async function cmdDown(args: string[]): Promise<void> {
     const verbose = values.verbose === true;
 
     const t = await provider.connect(record);
-    const runtime = new TmuxRuntime(t, spec.tmuxSocket);
+    const runtime = new HerdrRuntime(t);
     // Refuse before stopping the agent or reading any workspace byte.
     if (!wtReturn) {
       const when = "before stopping the agent";
       await downAssertPlainRemoteGitAbsent({ t, root, record, owner, when });
     }
-    await downStopAgent({ runtime, tmux: record.tmux });
+    await downStopAgent({ runtime, session: record.runtimeSession });
 
     console.log(`collecting ${t.label}:${record.remoteCwd}`);
     const collect = { env, t, root, record, owner, excludes, mirrorDeletes, verbose };
@@ -254,14 +254,17 @@ async function downAssertPlainRemoteGitAbsent(options: {
 }
 
 /** Stop the remote agent pane: interrupt, grace period, then kill. */
-async function downStopAgent(options: { runtime: TmuxRuntime; tmux: string }): Promise<void> {
-  const { runtime, tmux } = options;
-  const agentAlive = await runtime.alive(tmux);
+async function downStopAgent(options: {
+  runtime: HerdrRuntime;
+  session: string;
+}): Promise<void> {
+  const { runtime, session } = options;
+  const agentAlive = await runtime.alive(session);
   if (agentAlive) {
-    console.log(`stopping remote agent (${tmux})…`);
-    await runtime.interrupt(tmux);
+    console.log(`stopping remote agent (${session})…`);
+    await runtime.interrupt(session);
     await Bun.sleep(STOP_GRACE_MS);
-    await runtime.kill(tmux);
+    await runtime.kill(session);
   } else {
     console.log("remote agent already exited");
   }

@@ -8,7 +8,7 @@
  * record dropping back to `provisioning`) may update or clear it. The
  * refusal paths exercised, in order: explicit session switch and
  * --no-session orphan (pre-provision identity gate), live agent on a
- * reused sandbox (tmux liveness gate), starting + live agent finalize
+ * reused sandbox (herdr liveness gate), starting + live agent finalize
  * (early return, nothing re-shipped), retained session missing
  * (pre-provision identity gate), and starting + dead agent finalize
  * (an answerable `starting` is a COMPLETED ship either way; recovery is
@@ -17,9 +17,10 @@
  * Method: real `cmdUp`/`cmdDown` over the local transport against a PLAIN
  * directory workspace — exactly the pre-fix trigger, where `beam up`
  * cleared `wtGit` unconditionally at the top of the command — inside
- * hermetic BEAM_HOME/BEAM_DIR fixtures with a stub `omp` and a private
- * tmux socket; suites are `describe.skipIf`-gated on tmux/rsync/git with
- * explicit 30s/60s real-process timeouts.
+ * hermetic BEAM_HOME/BEAM_DIR fixtures with a stub `omp` and real herdr
+ * sessions isolated under the fixture's remote HOME; suites are
+ * `describe.skipIf`-gated on herdr/rsync/git with explicit 30s/60s
+ * real-process timeouts.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
@@ -35,20 +36,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { cmdUp } from "../src/commands/up.ts";
 import { cmdDown } from "../src/commands/down.ts";
 import { resolveEnv } from "../src/env.ts";
 import { loadState, updateRecord, type BeamRecord } from "../src/state.ts";
-import { runChecked } from "../src/util/shell.ts";
+import { run, runChecked, type RunResult } from "../src/util/shell.ts";
 import type { WtGitShipInfo } from "../src/workspace-git.ts";
 
-const TMUX_SOCKET = `beamwtgit-${process.pid}`;
+const HERDR = Bun.which("herdr");
 const HAVE_DEPS =
-  Bun.which("tmux") !== null && Bun.which("rsync") !== null && Bun.which("git") !== null;
+  HERDR !== null && Bun.which("rsync") !== null && Bun.which("git") !== null;
 
 // Explicit real-process budgets: 30s covers a local rsync ship/collect plus
-// tmux probes (the e2e.test.ts cost class); 60s adds real git init/commit
+// herdr probes (the e2e.test.ts cost class); 60s adds real git init/commit
 // sequences (the down-staged-return.test.ts git class).
 const ROUND_TRIP_TIMEOUT_MS = 30_000;
 const GIT_FLOW_TIMEOUT_MS = 60_000;
@@ -122,11 +123,65 @@ function remoteManifest(dir: string): Map<string, string> {
   return manifest;
 }
 
-function tmux(...args: string[]): void {
-  const res = Bun.spawnSync(["tmux", "-L", TMUX_SOCKET, ...args]);
-  if (res.exitCode !== 0) {
-    throw new Error(`tmux ${args.join(" ")} exited ${res.exitCode}: ${res.stderr.toString()}`);
+/**
+ * The same uid-scoped socket path the runtime's emitted scripts compute
+ * (`${TMPDIR:-/tmp}/herdr-<uid>/<name>.sock`) — the planted server MUST
+ * bind there and probes MUST connect there, or beam's alive() and these
+ * fixtures would talk past each other. The dir is uid-global and shared
+ * across fixtures; beam-<id> session names keep entries disjoint.
+ */
+function herdrSocketEnv(name: string): Record<string, string> {
+  const dir = join(process.env.TMPDIR ?? "/tmp", `herdr-${process.getuid!()}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return { HERDR_SESSION: name, HERDR_SOCKET_PATH: join(dir, `${name}.sock`) };
+}
+
+/**
+ * Run the real herdr with the session's uid-scoped socket pinned and the
+ * fixture's remote home as the registry — the same pair beam's
+ * transport-driven probes resolve.
+ */
+async function herdrCtl(session: string, ...args: string[]): Promise<RunResult> {
+  return run([HERDR!, ...args], { env: { HOME: remoteHome, ...herdrSocketEnv(session) } });
+}
+
+/**
+ * Plant a live herdr session: a real background per-session server plus one
+ * workspace pane — exactly what beam's alive() sees for a running agent.
+ * Bounded readiness poll, mirroring the runtime's own ensure-server window.
+ */
+async function plantLiveSession(session: string): Promise<void> {
+  const proc = Bun.spawn([HERDR!, "server"], {
+    env: { ...process.env, HOME: remoteHome, ...herdrSocketEnv(session) },
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  proc.unref();
+  const deadline = Date.now() + 10_000;
+  // Real wall-clock poll: the awaited condition is a genuinely external
+  // server process answering its socket — fake timers cannot advance it.
+  while ((await herdrCtl(session, "pane", "list")).code !== 0) {
+    if (Date.now() > deadline) throw new Error(`herdr server for ${session} never answered`);
+    await Bun.sleep(200);
   }
+  const created = await herdrCtl(
+    session, "workspace", "create", "--cwd", remoteHome, "--no-focus",
+  );
+  if (created.code !== 0) {
+    throw new Error(`herdr workspace create for ${session} failed: ${created.stderr}`);
+  }
+}
+
+/** Stop (checked — the plant must still be running) and delete a session. */
+async function killPlantedSession(session: string): Promise<void> {
+  // `server stop` reaches the uid-scoped socket directly; `session stop`
+  // only resolves HOME-registry sockets and cannot see the planted server.
+  const stopped = await herdrCtl(session, "server", "stop");
+  if (stopped.code !== 0) {
+    throw new Error(`herdr server stop for ${session} failed: ${stopped.stderr}`);
+  }
+  await herdrCtl(session, "session", "delete", session, "--json");
 }
 
 /** Current HEAD of a repository — the remote-work fingerprint refusals must preserve. */
@@ -139,7 +194,13 @@ describe.skipIf(!HAVE_DEPS)(
   () => {
     beforeAll(() => {
       savedCwd = process.cwd();
-      for (const k of ["BEAM_HOME", "BEAM_DIR", "PATH"]) savedEnv[k] = process.env[k];
+      for (const k of ["BEAM_HOME", "BEAM_DIR", "PATH", "XDG_CONFIG_HOME"]) {
+        savedEnv[k] = process.env[k];
+      }
+      // herdr resolves its session REGISTRY from XDG_CONFIG_HOME before
+      // HOME; the transport pins HOME only, so an ambient XDG value would
+      // escape the fixture's remote home.
+      delete process.env.XDG_CONFIG_HOME;
 
       localHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-wtgit-home-")));
       remoteHome = realpathSync(mkdtempSync(join(tmpdir(), "beam-wtgit-rhome-")));
@@ -161,7 +222,7 @@ describe.skipIf(!HAVE_DEPS)(
         JSON.stringify({
           defaultTarget: "sandbox",
           targets: {
-            sandbox: { type: "local", root: remoteRoot, home: remoteHome, tmuxSocket: TMUX_SOCKET },
+            sandbox: { type: "local", root: remoteRoot, home: remoteHome },
           },
         }),
       );
@@ -170,14 +231,26 @@ describe.skipIf(!HAVE_DEPS)(
       mkdirSync(fakeBin);
       writeFileSync(join(fakeBin, "omp"), FAKE_OMP);
       chmodSync(join(fakeBin, "omp"), 0o755);
-      process.env.PATH = `${fakeBin}:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
+      const herdrPrefix = HERDR === null ? "" : `${dirname(HERDR)}:`;
+      process.env.PATH =
+        `${fakeBin}:${herdrPrefix}/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`;
       process.env.BEAM_HOME = localHome;
       process.env.BEAM_DIR = beamDir;
       process.chdir(workDir);
     });
 
-    afterAll(() => {
-      Bun.spawnSync(["tmux", "-L", TMUX_SOCKET, "kill-server"]); // best-effort
+    afterAll(async () => {
+      // Best-effort: a failed test may leak a planted herdr server on the
+      // uid-scoped socket — stop it there (`session stop` never reaches
+      // the override socket) and delete every recorded session's registry
+      // entry (delete is idempotent).
+      if (HERDR !== null) {
+        for (const record of loadState(resolveEnv()).records) {
+          const name = record.runtimeSession;
+          await herdrCtl(name, "server", "stop");
+          await herdrCtl(name, "session", "delete", name, "--json");
+        }
+      }
       process.chdir(savedCwd);
       for (const [k, v] of Object.entries(savedEnv)) {
         if (v === undefined) delete process.env[k];
@@ -220,7 +293,7 @@ describe.skipIf(!HAVE_DEPS)(
     test(
       "layout refusal leaves the prior Git identity unchanged even with a live remote agent",
       async () => {
-        tmux("new-session", "-d", "-s", theRecord().tmux, "sleep 300");
+        await plantLiveSession(theRecord().runtimeSession);
 
         await expect(cmdUp(["--no-start"])).rejects.toThrow(/pinned as a git workspace/);
 
@@ -243,7 +316,7 @@ describe.skipIf(!HAVE_DEPS)(
         expect(after.sessionId).toBe("sess-aaa"); // identity untouched by the finalize
         expect(wtGitBytes()).toBe(SEEDED_BYTES);
 
-        tmux("kill-session", "-t", `=${record.tmux}`);
+        await killPlantedSession(record.runtimeSession);
       },
       ROUND_TRIP_TIMEOUT_MS,
     );

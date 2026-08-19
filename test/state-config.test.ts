@@ -2,8 +2,9 @@
  * Goal: state-file and target-config boundary regressions — record lookup
  * and update semantics, target resolution errors, malformed `state.json`
  * shapes refused with a recovery path instead of being treated as empty,
- * and runtime discriminant checks that reject persisted target types no
- * beam release ever wrote.
+ * the legacy `tmux` record key loading as `runtimeSession`, and runtime
+ * discriminant checks that reject persisted target types no beam release
+ * ever wrote.
  *
  * Method: exercise the pure config/state seams (`loadConfig`,
  * `resolveTarget`, `loadState`, `addRecord`/`findRecord`/`updateRecord`,
@@ -31,7 +32,7 @@ function record(id: string, status: BeamRecord["status"], createdAt: string): Be
     target: "sandbox",
     localCwd: "/w",
     remoteCwd: "/r",
-    tmux: `beam-${id}`,
+    runtimeSession: `beam-${id}`,
     status,
     createdAt,
     updatedAt: createdAt,
@@ -139,6 +140,24 @@ describe("state file read boundary", () => {
     writeState(env, `{"records": [`);
     expect(() => loadState(env)).toThrow(/not valid JSON/);
     expect(() => loadState(env)).toThrow(/restore it from a backup, or delete it/);
+  });
+
+  test("a legacy record persisted with the `tmux` key loads as runtimeSession", () => {
+    const env = tempEnv();
+    const legacy = {
+      id: "legacy1",
+      target: "sandbox",
+      localCwd: "/w",
+      remoteCwd: "/r",
+      tmux: "beam-legacy1", // pre-herdr releases persisted the session under this key
+      status: "up",
+      createdAt: "2026-01-01",
+      updatedAt: "2026-01-01",
+    };
+    writeState(env, JSON.stringify({ records: [legacy] }));
+    const loaded = loadState(env).records;
+    expect(loaded.length).toBe(1);
+    expect(loaded[0]!.runtimeSession).toBe("beam-legacy1");
   });
 });
 

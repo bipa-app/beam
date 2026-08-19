@@ -2869,7 +2869,7 @@ async function assertCollectionSourceBound(opts: {
  * The stable-collection sandwich: the pinned remote fingerprint must be
  * unchanged across the transfer, and the collected quarantine must BE that
  * fingerprinted tree. A recursive read racing a background writer (one
- * that survived the tmux kill: nohup, disowned, a daemon) can assemble a
+ * that survived the runtime kill: nohup, disowned, a daemon) can assemble a
  * "repository" mixing bytes from two moments that never coexisted remotely
  * — internally consistent, fsck-clean, and wrong. Equality of all three
  * manifests proves the import candidate is one remote semantic snapshot:

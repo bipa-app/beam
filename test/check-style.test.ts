@@ -488,7 +488,7 @@ describe("test-doc", () => {
 });
 
 describe("test-timeout", () => {
-  const gate = 'const HAVE_DEPS = Bun.which("tmux") !== null && Bun.which("git") !== null;';
+  const gate = 'const HAVE_DEPS = Bun.which("herdr") !== null && Bun.which("git") !== null;';
 
   test("a gated describe requires numeric timeouts on its tests", () => {
     const src = [

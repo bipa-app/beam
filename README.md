@@ -11,7 +11,7 @@ laptop                                sandbox server (any ssh box)
 ──────                                ───────────────────────────
 beam up -m "keep going"   ─────────►  workspace mirrored (rsync)
                                       session transcript installed
-                                      agent resumed in detached tmux
+                                      agent resumed in a detached herdr session
         (laptop off)                  … agent keeps working …
 beam attach / beam status ─────────►  watch or steer from anywhere
 beam down                 ◄─────────  agent stopped; returned work collected,
@@ -42,8 +42,10 @@ bun link        # exposes `beam`
 ```
 
 Requirements — local: [Bun](https://bun.sh), rsync, ssh. Server: sshd, rsync,
-tmux, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed.
+herdr, and the harness you use (`omp` / `pi` / `claude` / `codex`) installed.
 Shipping a linked `git worktree` additionally needs `git` on the server.
+Install herdr from [github.com/herdrdev/herdr](https://github.com/herdrdev/herdr)
+— its curl install script or a pinned release binary.
 Authenticate each harness **on the target** with `beam login` — beam never
 copies credentials between machines.
 
@@ -116,7 +118,7 @@ recovery.
 ```bash
 beam init                      # writes ~/.beam/config.json
 $EDITOR ~/.beam/config.json    # point "host" at any ssh destination
-beam doctor                    # verifies ssh, rsync, tmux, harnesses
+beam doctor                    # verifies ssh, rsync, herdr, harnesses
 beam login --tool omp          # authenticate the harness ON the target (one-time)
 
 cd ~/work/my-project           # the project you're working on
@@ -124,7 +126,7 @@ cd ~/work/my-project           # the project you're working on
 beam up -m "continue the task: finish the API migration and run the tests"
 # laptop off. later, from anywhere:
 beam status                    # last lines of the remote pane
-beam attach                    # full TUI over ssh (ctrl-b d to detach)
+beam attach                    # full TUI over ssh (ctrl+b q to detach)
 # when you're back:
 beam down                      # stop remote agent, collect + verify + stage the return (workspace AND session; remote retained)
 # inspect/integrate the printed stage (diff -ru / rsync), then:
@@ -143,7 +145,7 @@ beam kill <id> --purge         # once integrated: explicitly abandon and erase t
 | `beam up` | ship workspace + session, resume the agent remotely (`-m` kickoff prompt, `--tool`, `--session`, `--target`, `--no-start`, `--no-session`, `--no-delete`, `-v`) |
 | `beam ls` | list handoffs |
 | `beam status [id]` | remote liveness + a glimpse of the pane |
-| `beam attach [id]` | attach to the remote agent's tmux |
+| `beam attach [id]` | attach to the remote agent's herdr session |
 | `beam down [id]` | stop the remote agent, collect everything — workspace and grown transcript — into a verified stage under `~/.beam/returns` (never over your live worktree or session store), and RETAIN the remote |
 | `beam kill [id]` | kill the remote agent; `--purge` explicitly abandons and erases every remote trace without recollecting |
 
@@ -332,8 +334,9 @@ node_modules/
   `--session-dir` on it; Claude Code and Codex cannot resume an isolated
   path, so beam prints the exact manual import command instead of touching
   their live `~/.claude` / `~/.codex` stores.
-- The agent runs in a detached tmux session; it survives ssh drops, and when
-  it exits the pane drops to a shell so you can inspect what happened.
+- The agent runs in a named herdr session; it survives ssh drops, its
+  working/blocked/idle state is visible at a glance, and when the agent
+  exits the pane returns to a shell so you can inspect what happened.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture.
 
@@ -350,7 +353,7 @@ Four seams, all small interfaces:
   `SandboxProvider` (`src/provider/types.ts`): provision/connect/destroy
   yielding a Transport. ssh/local are the trivial provider; `agent-sandbox`
   owns a full claim lifecycle.
-- **New process manager** → the tmux runtime (`src/runtime/tmux.ts`) is the
+- **New process manager** → the herdr runtime (`src/runtime/herdr.ts`) is the
   template: start/alive/peek/interrupt/kill/attach.
 
 ## Security

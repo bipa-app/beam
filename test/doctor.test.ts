@@ -96,7 +96,7 @@ function canned(doctorRecords: Rec[], privilegeRecords: Rec[] = BENIGN_PRIVILEGE
 function doctorRecords(opts: { installed: boolean; authCode?: number; rootCode?: number }): Rec[] {
   const records: Rec[] = [
     ["tool.rsync", opts.installed ? 0 : 1, opts.installed ? "/usr/bin/rsync" : ""],
-    ["tool.tmux", opts.installed ? 0 : 1, opts.installed ? "/usr/bin/tmux" : ""],
+    ["tool.herdr", opts.installed ? 0 : 1, opts.installed ? "/usr/bin/herdr" : ""],
   ];
   for (const adapter of ADAPTERS) {
     records.push([
@@ -148,7 +148,7 @@ describe("doctor remote checks (fused)", () => {
     const expected = [
       "  connectivity: ok",
       "  remote rsync: /usr/bin/rsync",
-      "  remote tmux:  /usr/bin/tmux",
+      "  remote herdr: /usr/bin/herdr",
       ...ADAPTERS.map(
         (a) =>
           `  remote ${a.binary}:${pad(a.binary)}/opt/${a.binary}` +
@@ -182,7 +182,7 @@ describe("doctor remote checks (fused)", () => {
     const t = canned(doctorRecords({ installed: false }));
     const { lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
     expect(lines).toContain("  remote rsync: MISSING");
-    expect(lines).toContain("  remote tmux:  MISSING");
+    expect(lines).toContain("  remote herdr: MISSING");
     for (const adapter of ADAPTERS) {
       expect(lines).toContain(`  remote ${adapter.binary}:${pad(adapter.binary)}not installed`);
     }

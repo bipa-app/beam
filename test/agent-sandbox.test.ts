@@ -6,7 +6,7 @@
  * Method: a canned kubectl binary (see FAKE_KUBECTL_IMPL below) simulates the
  * cluster against fixture state on disk, `exec` runs argv locally with HOME
  * pointed at a fake pod home, and BEAM_HOME/BEAM_DIR isolate all beam state —
- * so real tar/bash/tmux semantics are exercised hermetically, no cluster or
+ * so real tar/bash/herdr semantics are exercised hermetically, no cluster or
  * kubeconfig required.
  */
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -35,7 +35,7 @@ import type { AgentSandboxTargetSpec } from "../src/config.ts";
 import { resolveEnv } from "../src/env.ts";
 import { AgentSandboxProvider } from "../src/provider/agent-sandbox.ts";
 import type { SandboxState } from "../src/provider/types.ts";
-import { TmuxRuntime } from "../src/runtime/tmux.ts";
+import { HerdrRuntime } from "../src/runtime/herdr.ts";
 import { acquireOperationLock, loadState, updateRecord, type BeamRecord } from "../src/state.ts";
 import { KubectlTransport, markerWalkBlocks, syncMarkerFor } from "../src/transport/kubectl.ts";
 import {
@@ -82,13 +82,18 @@ if (args.includes("exec") && args.includes("--")) {
   if (existsSync(failFile) && cmd.join(" ").includes(readFileSync(failFile, "utf8").trim())) {
     die("canned exec failure");
   }
-  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit", env: { ...process.env, HOME: podHome } });
+  // Pin XDG so herdr's session REGISTRY (~/.config/herdr) lives inside the
+  // fixture pod home; runtime SOCKETS live at the uid-scoped tmp dir under
+  // unique beam-<id> names, so they never collide with the developer's
+  // real herdr server (default session, distinct socket file).
+  const podEnv = { ...process.env, HOME: podHome, XDG_CONFIG_HOME: join(podHome, ".config") };
+  const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit", env: podEnv });
   // exec-hook-pattern + exec-hook.sh: run a canned script AFTER a matching
   // command completes — simulates a pod-side agent racing between beam's
   // remote shells (e.g. swapping .beam for a symlink mid-ship).
   const hookPat = join(STATE, "exec-hook-pattern");
   if (existsSync(hookPat) && cmd.join(" ").includes(readFileSync(hookPat, "utf8").trim())) {
-    spawnSync("bash", [join(STATE, "exec-hook.sh")], { stdio: "inherit", env: { ...process.env, HOME: podHome } });
+    spawnSync("bash", [join(STATE, "exec-hook.sh")], { stdio: "inherit", env: podEnv });
   }
   process.exit(res.status === null ? 1 : res.status);
 }
@@ -1274,7 +1279,11 @@ describe("kubectl transport", () => {
       "beam-p1",
       "/usr/local/bin/kubectl",
     );
-    expect(t.interactiveArgv("tmux attach -t '=beam-p1'")).toEqual([
+    // The attach payload rides through verbatim — its byte shape (fish-safe
+    // single bash -c string, socket-dir prep, HERDR_SOCKET_PATH pin) is
+    // asserted in shell.test.ts; here it proves pass-through, unmangled.
+    const attach = new HerdrRuntime(t).attachCommand("beam-p1");
+    expect(t.interactiveArgv(attach)).toEqual([
       "/usr/local/bin/kubectl",
       "--context",
       "ctx1",
@@ -1290,7 +1299,7 @@ describe("kubectl transport", () => {
       "--",
       "bash",
       "-c",
-      "tmux attach -t '=beam-p1'",
+      attach,
     ]);
   });
 
@@ -2224,14 +2233,14 @@ describe("kubectl transport", () => {
     const t = cannedTransport("beam-af", bin);
 
     // exec throws with kubectl's own stderr instead of returning {code: 1}…
-    await expect(t.exec("tmux has-session -t '=beam-x'")).rejects.toThrow(
+    await expect(t.exec("HERDR_SESSION='beam-x' herdr pane list")).rejects.toThrow(
       /unable to upgrade connection/,
     );
     // …so exists() can never read an unanswerable probe as "absent"…
     await expect(t.exists("/data/beam/ws")).rejects.toThrow(/kubectl exit 1/);
-    // …and the tmux liveness probe aborts reused-up instead of reporting a
+    // …and the herdr liveness probe aborts reused-up instead of reporting a
     // dead session (which would greenlight destructive follow-ons).
-    const rt = new TmuxRuntime(t, "beam-af-sock");
+    const rt = new HerdrRuntime(t);
     await expect(rt.alive("beam-x")).rejects.toThrow(/unable to upgrade connection/);
   });
 
@@ -2274,15 +2283,16 @@ describe("kubectl transport", () => {
     }
   });
 
-  describe.skipIf(Bun.which("tmux") === null)("tmux liveness over kubectl exec", () => {
+  describe.skipIf(Bun.which("herdr") === null)("herdr liveness over kubectl exec", () => {
     test(
-      "a real has-session exit 1 means not-alive — the one code that legitimately says no",
+      "a real server_not_running exit 1 means not-alive — the one refusal that says no",
       async () => {
         const c = makeCluster();
         const t = cannedTransport("beam-tl", c.bin);
-        // Private socket with no server: tmux itself answers has-session
-        // with a genuine exit 1, which must come back as a calm `false`.
-        const rt = new TmuxRuntime(t, `beam-test-rc-${Math.random().toString(36).slice(2, 10)}`);
+        // Throwaway remote HOME with no server: herdr itself answers pane
+        // list with a machine-readable server_not_running error and exit 1,
+        // which must come back as a calm `false` (absence proven).
+        const rt = new HerdrRuntime(t);
         expect(await rt.alive("beam-nope")).toBe(false);
       },
       30_000,
@@ -2790,7 +2800,7 @@ describe("handoff state machine (canned kubectl on PATH)", () => {
   );
 
   test(
-    "config drift (root/context/namespace/socket) cannot redirect a reused handoff",
+    "config drift (root/context/namespace/template) cannot redirect a reused handoff",
     async () => {
       const before = loadState(resolveEnv()).records[0]!;
       const driftedRoot = join(c.podHome, "data", "drifted");
@@ -2801,7 +2811,6 @@ describe("handoff state machine (canned kubectl on PATH)", () => {
           namespace: "elsewhere",
           template: "other-template",
           root: driftedRoot,
-          tmuxSocket: "drift",
         }),
       );
       const argvBefore = c.argv().length;
@@ -2964,7 +2973,7 @@ describe("handoff state machine (canned kubectl on PATH)", () => {
         target: "k8s",
         localCwd: workDir,
         remoteCwd: join(c.podHome, "data", "bipa", "legacy-ws"),
-        tmux: "beam-legacy1",
+        runtimeSession: "beam-legacy1",
         status: "up",
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
@@ -3116,9 +3125,55 @@ try {
   );
 });
 
-const START_SOCKET = `beam-start-${process.pid}`;
+/**
+ * The same uid-scoped socket path the runtime's emitted scripts compute
+ * (`${TMPDIR:-/tmp}/herdr-<uid>/<name>.sock`) — the planted server MUST
+ * bind there or the retry's liveness probe would look for it at herdr's
+ * HOME-derived default and never see it. The dir is uid-global and shared
+ * across fixtures; beam-<id> session names keep entries disjoint.
+ */
+function herdrSocketEnv(name: string): Record<string, string> {
+  const dir = join(process.env.TMPDIR ?? "/tmp", `herdr-${process.getuid!()}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return { HERDR_SESSION: name, HERDR_SOCKET_PATH: join(dir, `${name}.sock`) };
+}
 
-describe.skipIf(Bun.which("tmux") === null)(
+/**
+ * Recreate the crash-window artifact for the interrupted-start suite: a REAL
+ * herdr session named like beam's runtime session — registry under the
+ * fixture pod HOME, socket at the uid-scoped path — holding one live pane:
+ * exactly what a previous `up` leaves behind when it dies after starting
+ * the agent but before flipping the record.
+ */
+async function startHerdrSession(podHome: string, name: string, cwdAbs: string): Promise<void> {
+  const env = {
+    HOME: podHome,
+    XDG_CONFIG_HOME: join(podHome, ".config"),
+    ...herdrSocketEnv(name),
+  };
+  await runChecked(["bash", "-c", "nohup herdr server >/dev/null 2>&1 &"], { env });
+  let serverUp = false;
+  for (let i = 0; i < 50 && !serverUp; i++) {
+    serverUp = (await run(["herdr", "pane", "list"], { env })).code === 0;
+    // Real external process boot: the herdr server is a live OS daemon with
+    // no readiness event to await, so the probe is repolled on a real clock.
+    if (!serverUp) await Bun.sleep(200);
+  }
+  if (!serverUp) throw new Error(`herdr server for ${name} never came up`);
+  const created = await runChecked(
+    ["herdr", "workspace", "create", "--cwd", cwdAbs, "--no-focus"],
+    { env },
+  );
+  const parsed = JSON.parse(created.stdout) as { result: { root_pane: { pane_id: string } } };
+  // Type a long-lived placeholder into the root pane's shell so the retry
+  // finds a busy agent pane, not just the idle shell the workspace opens.
+  await runChecked(
+    ["herdr", "pane", "run", parsed.result.root_pane.pane_id, "bash -c 'sleep 300'"],
+    { env },
+  );
+}
+
+describe.skipIf(Bun.which("herdr") === null)(
   "interrupted start (`starting` phase, canned kubectl)",
   () => {
     let c: Cluster;
@@ -3127,6 +3182,7 @@ describe.skipIf(Bun.which("tmux") === null)(
     let storeDir: string;
     const savedEnv: Record<string, string | undefined> = {};
     let savedCwd: string;
+    let startedSession: string | undefined;
 
     beforeAll(() => {
       savedCwd = process.cwd();
@@ -3156,7 +3212,6 @@ describe.skipIf(Bun.which("tmux") === null)(
               template: "beam-coding",
               kubeconfig: "/kube/beam-user.kubeconfig",
               root: join(c.podHome, "data", "bipa"),
-              tmuxSocket: START_SOCKET,
             },
           },
         }),
@@ -3169,7 +3224,17 @@ describe.skipIf(Bun.which("tmux") === null)(
 
     afterAll(async () => {
       process.chdir(savedCwd);
-      await run(["tmux", "-L", START_SOCKET, "kill-server"]);
+      if (startedSession !== undefined) {
+        const env = {
+          HOME: c.podHome,
+          XDG_CONFIG_HOME: join(c.podHome, ".config"),
+          ...herdrSocketEnv(startedSession),
+        };
+        // `server stop` reaches the uid-scoped socket; `session stop` only
+        // resolves HOME-registry sockets and cannot see the planted server.
+        await run(["herdr", "server", "stop"], { env });
+        await run(["herdr", "session", "delete", startedSession, "--json"], { env });
+      }
       for (const [k, v] of Object.entries(savedEnv)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
@@ -3177,8 +3242,8 @@ describe.skipIf(Bun.which("tmux") === null)(
     });
 
     test(
-      "a retry finding live tmux while `starting` finalizes the record: same session identity, " +
-        "nothing re-shipped",
+      "a retry finding a live herdr pane while `starting` finalizes the record: same session " +
+        "identity, nothing re-shipped",
       async () => {
         await cmdUp(["--no-start"]);
         const before = loadState(resolveEnv()).records[0]!;
@@ -3186,10 +3251,9 @@ describe.skipIf(Bun.which("tmux") === null)(
         expect(before.sessionId).toBe("st-session");
 
         // Recreate the crash window exactly: the previous up started the
-        // agent's tmux session and died before flipping `up`.
-        await run(
-          ["tmux", "-L", START_SOCKET, "new-session", "-d", "-s", before.tmux, "sleep 300"],
-        );
+        // agent's herdr session and died before flipping `up`.
+        startedSession = before.runtimeSession;
+        await startHerdrSession(c.podHome, before.runtimeSession, before.remoteCwd);
         updateRecord(resolveEnv(), before.id, { status: "starting" });
 
         // A newer local session would win auto-detection on the retry, and a
@@ -3284,7 +3348,7 @@ describe("unresolved default-root abandon and kill promotion rules (canned kubec
       expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
 
       const argvBefore = c.argv().length;
-      c.flag("exec-fail-pattern", "tmux"); // a broken image must not block claim deletion
+      c.flag("exec-fail-pattern", "herdr"); // a broken image must not block claim deletion
       try {
         await cmdKill([record.id, "--purge"]);
       } finally {
