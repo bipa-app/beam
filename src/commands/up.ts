@@ -46,8 +46,10 @@ import {
   assertContainedWorkspace,
   assertNoLocalReservedCollision,
   assertPurgeablePath,
+  assertShipSizeBounded,
   ensureGitExclude,
   establishContainedWorkspace,
+  formatBytes,
   gatherExcludes,
   gitSummary,
   remoteWorkspaceName,
@@ -89,6 +91,7 @@ usage: beam up [options]
   --no-session            ship the workspace only
   --no-start              install but do not start the remote agent
   --verbose, -v           stream rsync progress
+  --allow-large           ship even a mirror past the size ceiling (skips the preflight)
 `;
 
 /** Parsed `beam up` CLI values, threaded to the phase helpers that need them. */
@@ -100,6 +103,7 @@ type UpValues = {
   "no-session"?: boolean;
   "no-start"?: boolean;
   verbose?: boolean;
+  "allow-large"?: boolean;
   help?: boolean;
 };
 
@@ -123,6 +127,7 @@ export async function cmdUp(args: string[]): Promise<void> {
       "no-session": { type: "boolean" },
       "no-start": { type: "boolean" },
       verbose: { type: "boolean", short: "v" },
+      "allow-large": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -134,14 +139,10 @@ export async function cmdUp(args: string[]): Promise<void> {
   const env = resolveEnv();
   const config = loadConfig(env);
   const localCwd = process.cwd();
-  // Pure local checks first: an unshippable Git layout must fail before
-  // the reservation claims a (possibly exclusive) target or pins a
-  // misleading "plain" layout that a later repaired retry would trip over.
-  assertShippableGitLayout(localCwd);
-  // The reserved `.beam` name (any ASCII case, on disk or git-tracked)
-  // would be silently omitted from the mirror — refuse before the record
-  // reservation and before any remote effect.
-  await assertNoLocalReservedCollision(localCwd);
+  // Pure local checks first — layout, reserved names, mirror size — so a
+  // doomed ship fails before the reservation claims a (possibly exclusive)
+  // target or any remote effect runs.
+  await upLocalPreflights({ localCwd, config, allowLarge: values["allow-large"] === true });
 
   const resolved = resolveUpTarget({ env, config, localCwd, requested: values.target });
   const detected = values["no-session"]
@@ -178,6 +179,38 @@ export async function cmdUp(args: string[]): Promise<void> {
     });
   } finally {
     releaseOp();
+  }
+}
+
+/**
+ * Refusal ceiling for the outbound filtered mirror. Coding workspaces ship
+ * far below it; crossing it almost always means build artifacts (a cargo
+ * `target/`, `node_modules/`) are riding the mirror — the ship stages the
+ * tree locally twice and then transfers it whole on the kubectl transport,
+ * so an unnoticed 39 GiB `target/` costs hours, not minutes.
+ */
+const MAX_SHIP_BYTES = 2 * 1024 ** 3;
+
+/**
+ * Pure local preflights, BEFORE the target reservation and any remote
+ * effect: an unshippable Git layout, a reserved-name collision, or an
+ * oversized mirror fails here — not after a (possibly exclusive) target is
+ * claimed or hours of staging and transfer are sunk. `--allow-large` is
+ * the explicit license for a genuinely huge ship and skips the size walk.
+ */
+async function upLocalPreflights(o: {
+  localCwd: string;
+  config: Config;
+  allowLarge: boolean;
+}): Promise<void> {
+  assertShippableGitLayout(o.localCwd);
+  await assertNoLocalReservedCollision(o.localCwd);
+  if (o.allowLarge) return;
+  const shipBytes = await assertShipSizeBounded(o.localCwd, gatherExcludes(o.localCwd, o.config), {
+    bytesMax: MAX_SHIP_BYTES,
+  });
+  if (shipBytes !== undefined) {
+    console.log(`ship size: ${formatBytes(shipBytes)} (mirror after excludes)`);
   }
 }
 

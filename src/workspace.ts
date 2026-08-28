@@ -278,6 +278,113 @@ export function gatherExcludes(localCwd: string, config: Config): string[] {
   return excludes;
 }
 
+/** Human-readable byte count: binary units, matching how rsync cost scales. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+
+/**
+ * Byte size of the filtered mirror this ship would transfer, measured with
+ * rsync's OWN pattern semantics (`--dry-run --stats` into an empty probe
+ * dir): a metadata-only walk, nothing is copied. Parses both stats shapes
+ * (GNU rsync `674,325 bytes`; openrsync `674325 B`). Returns undefined
+ * when the walk fails or the stats are unreadable — the guard is advisory
+ * UX, and a genuinely broken rsync must surface in the ship itself (after
+ * the exclude-union journal), never as a new pre-reservation failure mode.
+ */
+async function measureShipBytes(
+  localCwd: string,
+  excludes: string[],
+): Promise<number | undefined> {
+  const probe = mkdtempSync(join(tmpdir(), "beam-shipsize-"));
+  try {
+    const res = await run([
+      "rsync",
+      "-a",
+      "--dry-run",
+      "--stats",
+      ...excludes.map((exclude) => `--exclude=${exclude}`),
+      "--",
+      `${localCwd.replace(/\/+$/, "")}/`,
+      `${probe}/`,
+    ]);
+    if (res.code !== 0) return undefined;
+    const match = res.stdout.match(/Total file size:\s*([\d,.]+)\s/);
+    const bytes = match === null ? NaN : Number((match[1] ?? "").replace(/[,.]/g, ""));
+    if (!Number.isSafeInteger(bytes) || bytes < 0) return undefined;
+    return bytes;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+/** How many first-level entries an oversized-ship refusal names. */
+const MAX_SHIP_OFFENDERS = 5;
+
+/**
+ * The workspace's largest first-level entries, for the oversized-ship
+ * refusal ("target 39.0 GiB, node_modules 1.2 GiB"). `du` measures the
+ * REAL tree (excludes not applied): the point is to show where the bytes
+ * live so the right `.beamignore` pattern is obvious. Empty string when
+ * nothing is measurable — the refusal still stands on the total.
+ */
+async function largestWorkspaceEntries(localCwd: string): Promise<string> {
+  const entries = readdirSync(localCwd).filter((entry) => entry !== BEAM_RESERVED_DIR);
+  if (entries.length === 0) return "";
+  // du exits nonzero when any subtree is unreadable but still sums the
+  // rest; a partial hint beats none, so only a totally empty result bails.
+  const res = await run(["du", "-sk", "--", ...entries], { cwd: localCwd });
+  if (res.code !== 0 && res.stdout === "") return "";
+  const sized: Array<{ name: string; bytes: number }> = [];
+  for (const line of res.stdout.split("\n")) {
+    const match = line.match(/^(\d+)\s+(.+)$/);
+    if (match === null) continue;
+    const kib = Number(match[1]);
+    if (!Number.isSafeInteger(kib)) continue;
+    sized.push({ name: match[2] ?? "", bytes: kib * 1024 });
+  }
+  sized.sort((a, b) => b.bytes - a.bytes);
+  return sized
+    .slice(0, MAX_SHIP_OFFENDERS)
+    .map((entry) => `${entry.name} ${formatBytes(entry.bytes)}`)
+    .join(", ");
+}
+
+/**
+ * Size preflight for the outbound mirror, run BEFORE any remote effect: a
+ * ship past `bytesMax` almost always means build artifacts (a cargo
+ * `target/`, `node_modules/`) are riding the mirror — hours of transfer
+ * and a doubled local stage nobody wants. The refusal names where the
+ * bytes live and both escapes. An unmeasurable mirror warns and passes
+ * (fail-open: the guard is advisory; the ship itself still fails closed).
+ * Returns the measured bytes for display, undefined when unmeasurable.
+ */
+export async function assertShipSizeBounded(
+  localCwd: string,
+  excludes: string[],
+  o: { bytesMax: number },
+): Promise<number | undefined> {
+  const bytes = await measureShipBytes(localCwd, excludes);
+  if (bytes === undefined) {
+    console.warn("warning: could not measure the ship size (rsync dry run failed) — skipping " +
+      "the size preflight");
+    return undefined;
+  }
+  if (bytes <= o.bytesMax) return bytes;
+  const offenders = await largestWorkspaceEntries(localCwd);
+  throw new Error(
+    `beam up: this workspace would ship ${formatBytes(bytes)} ` +
+      `(ceiling ${formatBytes(o.bytesMax)})` +
+      (offenders === "" ? "" : `\n  largest entries: ${offenders}`) +
+      `\n  exclude build artifacts in ${join(localCwd, ".beamignore")} ` +
+      `(rsync patterns, one per line, e.g. "/target")` +
+      `\n  or re-run with --allow-large to ship it all`,
+  );
+}
+
 /**
  * Exact, copy-pasteable command for explicitly integrating a verified
  * return stage. Its filter argv is the same effective exclude union used
