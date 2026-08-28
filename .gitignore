@@ -1,3 +1,4 @@
 node_modules/
 .beam/
 *.log
+skills/beam-workspace/

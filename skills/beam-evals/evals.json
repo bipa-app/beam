@@ -1,0 +1,106 @@
+{
+  "skill_name": "beam",
+  "evals": [
+    {
+      "id": 0,
+      "name": "first-handoff-with-build-artifacts",
+      "prompt": "I'm working in the fixture workspace (path given below) and want to hand my latest omp session off so it keeps working remotely. Use the beam CLI (installed as `beam`). Ship my newest omp session for this workspace to the configured `sandbox` target, so the remote agent continues the task: finish renaming FooClient to BarClient in src/ and run the tests. This is a rehearsal environment: export BEAM_HOME and BEAM_DIR as given below before every beam command, and prepend the fixture's bin/ to PATH so the stub harness binary is used. When you are done, state the handoff id and how you verified the remote side is set up to work.",
+      "expected_output": "A handoff record with status up, a self-contained kickoff message journaled, the multi-hundred-MB target/ directory excluded from the ship (via .beamignore or equivalent), and the session installed remotely.",
+      "files": [
+        "fixture: rust-like workspace with a large target/ dir, planted omp session, local beam target config"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "exclusive-slot-held-by-stale-handoff",
+      "prompt": "Yesterday I beamed this workspace up and forgot about it. Now `beam up` refuses with `already up on sandbox`. I don't need anything from that old handoff \u2014 the remote agent never did anything. Get my NEWEST omp session shipped to the sandbox target with a kickoff telling it to continue implementing the CSV export feature. Same rehearsal environment rules: export BEAM_HOME/BEAM_DIR as given below, prepend fixture bin/ to PATH. Report which handoff ids you retired and created.",
+      "expected_output": "The stale handoff is retired (killed/purged, not left up), a fresh handoff reaches status up with the newest session and a kickoff message, and no destructive action is taken against local files.",
+      "files": [
+        "fixture: workspace with an existing up handoff holding the exclusive slot, two planted omp sessions (old shipped, new local)"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "idle-remote-agent-diagnosis",
+      "prompt": "I beamed up my session about an hour ago (the handoff id is in `beam ls`) and the remote side has produced nothing \u2014 no commits, no output, nothing. Figure out what went wrong and fix it so the remote agent actually starts working on: 'add retry with backoff to the HTTP client in src/http.ts'. Rehearsal environment: export BEAM_HOME/BEAM_DIR as given below, prepend fixture bin/ to PATH for beam commands. Explain the root cause in one sentence at the end.",
+      "expected_output": "Diagnosis that the handoff was shipped without a kickoff message so the remote agent idles at its prompt; remediation that ends with a handoff in status up whose kickoff contains the retry/backoff task.",
+      "files": [
+        "fixture: workspace with an up handoff that has no kickoff journaled, stub harness that prints an idle prompt"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "stale-slot-with-remote-work-cascade",
+      "prompt": "Yesterday I beamed this workspace up to work on the parser refactor and forgot about it. My teammate thinks the remote agent may have actually produced something, but I'm not sure. Whatever happens, don't lose anything the remote side made. What I need now: my NEWEST omp session shipped to the sandbox target with a kickoff to continue the parser rewrite. Report exactly what you found remotely, what you preserved and where, and the handoff ids you retired and created.",
+      "expected_output": "Old handoff's remote work collected via beam down before kill --purge; fresh handoff up with newest session, parser kickoff, and target/ excluded.",
+      "files": [
+        "hermetic fixture built by evals/setup.ts"
+      ],
+      "assertions": [
+        "the old handoff's remote work was COLLECTED before retiring (staged return holds REMOTE_RESULT.md)",
+        "the old handoff was then retired (killed), freeing the workspace",
+        "a fresh handoff is up with the NEWEST session (sess-two99) and a parser kickoff",
+        "the build dir target/ was excluded from the fresh ship"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "interrupted-ship-resume",
+      "prompt": "I ran a beam up from this workspace earlier and it crashed partway through (my terminal died mid-transfer). Get the handoff finished so the remote agent is actually working on the pagination task, and tell me whether any of the earlier attempt was reusable or whether you had to start over.",
+      "expected_output": "The same record is resumed to completion by re-running beam up (journal cleared, no replacement record); the journaled pagination kickoff rides the resumed ship.",
+      "files": [
+        "hermetic fixture built by evals/setup.ts"
+      ],
+      "assertions": [
+        "the interrupted handoff was RESUMED to completion (same record id ends up, journal cleared)",
+        "no parallel or replacement handoff was created (exactly one record)",
+        "the journaled pagination kickoff rode the resumed ship into the resume command",
+        "the workspace landed remotely"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "torn-snapshot-live-writer",
+      "prompt": "Beam up this workspace's newest omp session to the sandbox target with a kickoff to continue the codegen pipeline work. Heads up: I was running some local dev tooling earlier and I'm not 100% sure everything is shut down. If anything gets in the way, fix the actual cause and explain what it was.",
+      "expected_output": "beam up refuses with the torn-snapshot coherence guard while the writer runs; the agent finds and stops the writer, retries, and the handoff completes.",
+      "files": [
+        "hermetic fixture built by evals/setup.ts"
+      ],
+      "assertions": [
+        "the interfering writer was found and stopped",
+        "the handoff completed after the writer stopped (status up, generated source shipped)",
+        "a kickoff for the codegen task was journaled",
+        "the report names the torn-snapshot/staging refusal (not a generic retry)"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "oversized-mirror-guard",
+      "prompt": "Ship my newest omp session to the sandbox target so the remote agent can profile the hot path in src/http.ts \u2014 that's the kickoff. If beam complains about anything, resolve it the right way and explain your choice.",
+      "expected_output": "beam up refuses (2.1 GiB over the 2 GiB ceiling, naming target/); the agent excludes via .beamignore rather than forcing --allow-large and re-ships small.",
+      "files": [
+        "hermetic fixture built by evals/setup.ts"
+      ],
+      "assertions": [
+        "the handoff reached up with a kickoff journaled",
+        "the 2.1 GiB build dir was EXCLUDED (not shipped via --allow-large)",
+        "the report names the size-ceiling refusal"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "finished-work-round-trip",
+      "prompt": "The remote agent from my earlier handoff should be done with the migration plan by now. Verify it finished, bring EVERYTHING back (the workspace results and the grown conversation), integrate the results into my local workspace, tell me the exact command to resume the session locally, and leave the target slot free.",
+      "expected_output": "beam down stages the return; the printed integration command is executed so REMOTE_RESULT.md lands locally; the resume hint is surfaced; kill --purge frees the slot.",
+      "files": [
+        "hermetic fixture built by evals/setup.ts"
+      ],
+      "assertions": [
+        "the remote result was integrated into the LOCAL workspace",
+        "the grown remote transcript was collected into the staged return",
+        "the handoff was retired after collection (killed \u2014 target slot free)",
+        "the report hands the user the local resume path (omp --resume of the staged session)"
+      ]
+    }
+  ]
+}

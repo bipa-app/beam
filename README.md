@@ -158,6 +158,21 @@ for **omp**/**pi**, a `/beam-up` command for **Claude Code**, and a prompt for
 and (omp/pi) switch the local window to a fresh session so the shipped
 transcript stops growing locally.
 
+### Agent skill: teach any agent to beam
+
+[`skills/beam/`](skills/beam/SKILL.md) is an agent skill that teaches a
+coding agent the full handoff workflow — preflight, `.beamignore` hygiene,
+kickoff messages, verification, the return leg, and the failure playbook.
+Install it into a project (or globally) with:
+
+```bash
+npx skills add bipa-app/beam        # or a local checkout path
+```
+
+It lands in `.agents/skills/beam` with a Claude Code symlink; omp and pi
+discover it there too. The eval harness that gates changes to the skill
+lives in [`skills/beam-evals/`](skills/beam-evals/).
+
 ## Configuration
 
 `~/.beam/config.json`:
