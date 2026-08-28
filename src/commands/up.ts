@@ -46,8 +46,10 @@ import {
   assertContainedWorkspace,
   assertNoLocalReservedCollision,
   assertPurgeablePath,
+  assertShipSizeBounded,
   ensureGitExclude,
   establishContainedWorkspace,
+  formatBytes,
   gatherExcludes,
   gitSummary,
   remoteWorkspaceName,
@@ -89,6 +91,7 @@ usage: beam up [options]
   --no-session            ship the workspace only
   --no-start              install but do not start the remote agent
   --verbose, -v           stream rsync progress
+  --allow-large           ship even a mirror past the size ceiling (skips the preflight)
 `;
 
 /** Parsed `beam up` CLI values, threaded to the phase helpers that need them. */
@@ -100,6 +103,7 @@ type UpValues = {
   "no-session"?: boolean;
   "no-start"?: boolean;
   verbose?: boolean;
+  "allow-large"?: boolean;
   help?: boolean;
 };
 
@@ -123,6 +127,7 @@ export async function cmdUp(args: string[]): Promise<void> {
       "no-session": { type: "boolean" },
       "no-start": { type: "boolean" },
       verbose: { type: "boolean", short: "v" },
+      "allow-large": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -134,14 +139,10 @@ export async function cmdUp(args: string[]): Promise<void> {
   const env = resolveEnv();
   const config = loadConfig(env);
   const localCwd = process.cwd();
-  // Pure local checks first: an unshippable Git layout must fail before
-  // the reservation claims a (possibly exclusive) target or pins a
-  // misleading "plain" layout that a later repaired retry would trip over.
-  assertShippableGitLayout(localCwd);
-  // The reserved `.beam` name (any ASCII case, on disk or git-tracked)
-  // would be silently omitted from the mirror — refuse before the record
-  // reservation and before any remote effect.
-  await assertNoLocalReservedCollision(localCwd);
+  // Pure local checks first — layout, reserved names, mirror size — so a
+  // doomed ship fails before the reservation claims a (possibly exclusive)
+  // target or any remote effect runs.
+  await upLocalPreflights({ localCwd, config, allowLarge: values["allow-large"] === true });
 
   const resolved = resolveUpTarget({ env, config, localCwd, requested: values.target });
   const detected = values["no-session"]
@@ -178,6 +179,38 @@ export async function cmdUp(args: string[]): Promise<void> {
     });
   } finally {
     releaseOp();
+  }
+}
+
+/**
+ * Refusal ceiling for the outbound filtered mirror. Coding workspaces ship
+ * far below it; crossing it almost always means build artifacts (a cargo
+ * `target/`, `node_modules/`) are riding the mirror — the ship stages the
+ * tree locally twice and then transfers it whole on the kubectl transport,
+ * so an unnoticed 39 GiB `target/` costs hours, not minutes.
+ */
+const MAX_SHIP_BYTES = 2 * 1024 ** 3;
+
+/**
+ * Pure local preflights, BEFORE the target reservation and any remote
+ * effect: an unshippable Git layout, a reserved-name collision, or an
+ * oversized mirror fails here — not after a (possibly exclusive) target is
+ * claimed or hours of staging and transfer are sunk. `--allow-large` is
+ * the explicit license for a genuinely huge ship and skips the size walk.
+ */
+async function upLocalPreflights(o: {
+  localCwd: string;
+  config: Config;
+  allowLarge: boolean;
+}): Promise<void> {
+  assertShippableGitLayout(o.localCwd);
+  await assertNoLocalReservedCollision(o.localCwd);
+  if (o.allowLarge) return;
+  const shipBytes = await assertShipSizeBounded(o.localCwd, gatherExcludes(o.localCwd, o.config), {
+    bytesMax: MAX_SHIP_BYTES,
+  });
+  if (shipBytes !== undefined) {
+    console.log(`ship size: ${formatBytes(shipBytes)} (mirror after excludes)`);
   }
 }
 
@@ -397,6 +430,7 @@ async function upUnderOperationLock(o: UpLockedOptions): Promise<void> {
       provider: pinned.provider,
       reused: o.reused,
       targetName: o.targetName,
+      requestedKickoff: o.values.message,
     });
     if (screened === undefined) return;
     // Build the next payload after all refusal gates, but do not replace
@@ -603,6 +637,8 @@ type UpProvisionScreenOptions = {
   provider: SandboxProvider;
   reused: boolean;
   targetName: string;
+  /** The explicit `--message` of THIS invocation (never the stored one). */
+  requestedKickoff: string | undefined;
 };
 
 /** The provisioned transport and runtime a ship proceeds through. */
@@ -641,6 +677,7 @@ async function upProvisionAndScreen(
       runtime,
       agentAlive,
       targetName: o.targetName,
+      requestedKickoff: o.requestedKickoff,
     });
     return undefined;
   }
@@ -724,6 +761,7 @@ async function upRestartRetainedAgent(o: {
   runtime: HerdrRuntime;
   agentAlive: boolean;
   targetName: string;
+  requestedKickoff: string | undefined;
 }): Promise<void> {
   const record = o.record;
   if (o.agentAlive) {
@@ -732,6 +770,19 @@ async function upRestartRetainedAgent(o: {
         `on ${o.targetName} — ` +
         `beam attach ${record.id} to watch it, or collect it (beam down ${record.id}) and ` +
         `retire it (beam kill ${record.id} --purge) before re-shipping`,
+    );
+  }
+  // An explicit NEW kickoff can never ride a restart-in-place: the
+  // journaled resume command replays the completed ship's argv verbatim,
+  // so the message would be silently dropped — and the retained remote
+  // generation may hold work a silent re-kick would strand. Refuse with
+  // the fix instead. Re-running the SAME beam up line (same -m) is fine:
+  // that kickoff is already baked into the journaled argv.
+  if (o.requestedKickoff !== undefined && o.requestedKickoff !== record.kickoff) {
+    throw new Error(
+      `handoff ${record.id} already completed its ship on ${o.targetName} — a new --message ` +
+        `cannot be applied to its journaled resume command. beam down ${record.id} collects ` +
+        `the remote work; retire with beam kill ${record.id} --purge, then beam up -m again`,
     );
   }
   // Retained handoff whose agent exited: when the ship journaled its
@@ -873,7 +924,7 @@ async function upExecuteShip(o: UpExecuteShipOptions): Promise<void> {
     stagedSession: staged.stagedSession,
     noStart: o.values["no-start"] === true,
   });
-  upPromoteToUp(ship, { detected: o.detected, started, promoteShipInfo });
+  upPromoteToUp(ship, { detected: o.detected, started, kickoff: o.kickoff, promoteShipInfo });
 }
 
 /**
@@ -1063,7 +1114,7 @@ const STAGED_TRANSCRIPT = "transcript.jsonl";
 const STAGED_ARTIFACTS = "artifacts";
 
 /** Root of a record's Beam-private session bundle stages. */
-function sessionStageRoot(env: BeamEnv, id: string): string {
+export function sessionStageRoot(env: BeamEnv, id: string): string {
   return join(env.beamDir, "ship-stage", id);
 }
 
@@ -1798,6 +1849,7 @@ function upPromoteToUp(
   o: {
     detected: DetectedSession | undefined;
     started: boolean;
+    kickoff: string | undefined;
     promoteShipInfo: WtGitShipInfo | undefined;
   },
 ): void {
@@ -1822,6 +1874,11 @@ function upPromoteToUp(
     console.log(`  glimpse: beam status ${ship.id}`);
     if (o.detected?.adapter.tool === "omp") {
       console.log(`  browser: attach once and run /collab for a web link`);
+    }
+    // The most common "beam never worked": a resumed agent with no prompt
+    // waits at its input box forever, looking dead from the outside.
+    if (o.kickoff === undefined) {
+      console.log(`  note:    no kickoff message — the agent idles until you attach or re-up -m`);
     }
   } else {
     if (o.detected) {

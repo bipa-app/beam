@@ -1375,7 +1375,10 @@ describe.skipIf(!HAVE_DEPS)("fresh up: the workspace mirror ships one coherent s
         // the real transfer, then (one-shot, keyed on the STAGING source —
         // the pinned-dir transports no longer expose the stage dest in argv)
         // rewrites BOTH files — exactly the window between the stage's
-        // first pass and its checksum re-read.
+        // first pass and its checksum re-read. The size preflight's
+        // --dry-run walk runs earlier over the same source and must NOT
+        // consume the one-shot: it moves no bytes, so it is outside the
+        // stage-coherence window this test targets.
         const realRsync = Bun.which("rsync")!;
         const binDir = join(base, "bin");
         mkdirSync(binDir);
@@ -1387,7 +1390,7 @@ describe.skipIf(!HAVE_DEPS)("fresh up: the workspace mirror ships one coherent s
             "#!/bin/bash",
             `"${realRsync}" "$@"`,
             "rc=$?",
-            `case "$*" in *"${ws}"*) if [ -f "${flag}" ]; then rm -f "${flag}"; ` +
+            `case "$*" in *--dry-run*) ;; *"${ws}"*) if [ -f "${flag}" ]; then rm -f "${flag}"; ` +
               `printf 'a v2\\n' > "${ws}/a.txt"; printf 'b v2\\n' > "${ws}/b.txt"; fi;; esac`,
             "exit $rc",
             "",

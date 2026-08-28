@@ -27,6 +27,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -227,6 +228,22 @@ describe.skipIf(!HAVE_DEPS)(
     }, ROUND_TRIP_TIMEOUT_MS);
 
     test(
+      "a NEW --message on a completed handoff refuses instead of silently dropping it",
+      async () => {
+        // The restart-in-place path replays the journaled resume argv
+        // verbatim; an explicit different kickoff cannot ride it and must
+        // refuse with the retire-first fix, never be silently ignored.
+        await expect(cmdUp(["--no-start", "-m", "a different kickoff"])).rejects.toThrow(
+          /a new --message cannot be applied/,
+        );
+        const record = theRecord();
+        expect(record.kickoff).toBe("first kickoff"); // journaled kickoff untouched
+        expect(record.status).toBe("up");
+      },
+      ROUND_TRIP_TIMEOUT_MS,
+    );
+
+    test(
       "up resolves the retained target snapshot after config removal and still refuses re-shipping",
       async () => {
         writeFileSync(join(beamDir, "config.json"), JSON.stringify({ targets: {} }));
@@ -335,6 +352,49 @@ describe("kill/login --help is inert", () => {
     } finally {
       if (saved === undefined) delete process.env.BEAM_DIR;
       else process.env.BEAM_DIR = saved;
+    }
+  });
+});
+
+describe("kill --purge finalization", () => {
+  test("an unshipped record's kill reaps its pending journal and stage", async () => {
+    const saved = process.env.BEAM_DIR;
+    const home = mkdtempSync(join(tmpdir(), "beam-killfinal-"));
+    const env: BeamEnv = { home, beamDir: join(home, ".beam") };
+    process.env.BEAM_DIR = env.beamDir;
+    try {
+      // A provisioning record whose remote cwd never resolved: kill --purge
+      // takes the destroy-only path (no transport), but the record still
+      // carries a pending-ship journal and its local stage from the crashed
+      // attempt — both must die with the handoff, not outlive it forever.
+      const now = new Date().toISOString();
+      addRecord(env, {
+        id: "kf1",
+        target: "sandbox",
+        localCwd: join(home, "work"),
+        remoteCwd: "/never/resolved",
+        remoteCwdResolved: false,
+        runtimeSession: "beam-kf1",
+        status: "provisioning",
+        createdAt: now,
+        updatedAt: now,
+        targetSpec: { type: "local", root: join(home, "remote-root"), home },
+        shipPending: { workspaceDigest: "d".repeat(64) },
+      });
+      const stage = join(env.beamDir, "ship-stage", "kf1");
+      mkdirSync(stage, { recursive: true });
+      writeFileSync(join(stage, "transcript.jsonl"), "{}\n");
+
+      await captureLog(() => cmdKill(["kf1", "--purge"]));
+
+      const record = getRecord(env, "kf1");
+      expect(record.status).toBe("killed");
+      expect(record.shipPending).toBeUndefined();
+      expect(existsSync(stage)).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.BEAM_DIR;
+      else process.env.BEAM_DIR = saved;
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

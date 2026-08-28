@@ -115,6 +115,17 @@ const GIT_ENV = {
   GIT_AUTHOR_EMAIL: "t@example.invalid",
   GIT_COMMITTER_NAME: "t",
   GIT_COMMITTER_EMAIL: "t@example.invalid",
+  // Auto-maintenance detaches from the fixture command that triggered it
+  // and drops a transient .git/objects/maintenance.lock the byte-level
+  // manifests here can catch mid-flight (observed on a slow macOS CI
+  // runner). Fixture repos never need maintenance; pin it off wholesale.
+  GIT_CONFIG_COUNT: "3",
+  GIT_CONFIG_KEY_0: "maintenance.auto",
+  GIT_CONFIG_VALUE_0: "false",
+  GIT_CONFIG_KEY_1: "gc.auto",
+  GIT_CONFIG_VALUE_1: "0",
+  GIT_CONFIG_KEY_2: "gc.autoDetach",
+  GIT_CONFIG_VALUE_2: "false",
 };
 
 async function git(cwd: string, ...args: string[]) {

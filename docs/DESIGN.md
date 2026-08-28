@@ -412,7 +412,11 @@ re-ship costs a full copy and empties the destination first. A git workspace
 also ships its full object closure (`clone --no-hardlinks --dissociate`), so
 worst-case outbound ≈ workspace bytes + repository bytes, and a return
 collects the same again. **Bound: one batched transfer per logical payload;
-no per-file transfers.**
+no per-file transfers. `beam up` refuses a filtered mirror larger than
+`MAX_SHIP_BYTES` (2 GiB) before any remote effect — one local rsync
+`--dry-run --stats` metadata walk, no bytes copied — unless `--allow-large`
+explicitly licenses the ship (an unnoticed cargo `target/` once rode the
+mirror for hours).**
 
 **Peak buffered memory.** Hashing is O(1) in file size: `fileSha256` streams
 through one reused 1 MiB buffer because workspace files and git packs reach
