@@ -430,6 +430,7 @@ async function upUnderOperationLock(o: UpLockedOptions): Promise<void> {
       provider: pinned.provider,
       reused: o.reused,
       targetName: o.targetName,
+      requestedKickoff: o.values.message,
     });
     if (screened === undefined) return;
     // Build the next payload after all refusal gates, but do not replace
@@ -636,6 +637,8 @@ type UpProvisionScreenOptions = {
   provider: SandboxProvider;
   reused: boolean;
   targetName: string;
+  /** The explicit `--message` of THIS invocation (never the stored one). */
+  requestedKickoff: string | undefined;
 };
 
 /** The provisioned transport and runtime a ship proceeds through. */
@@ -674,6 +677,7 @@ async function upProvisionAndScreen(
       runtime,
       agentAlive,
       targetName: o.targetName,
+      requestedKickoff: o.requestedKickoff,
     });
     return undefined;
   }
@@ -757,6 +761,7 @@ async function upRestartRetainedAgent(o: {
   runtime: HerdrRuntime;
   agentAlive: boolean;
   targetName: string;
+  requestedKickoff: string | undefined;
 }): Promise<void> {
   const record = o.record;
   if (o.agentAlive) {
@@ -765,6 +770,19 @@ async function upRestartRetainedAgent(o: {
         `on ${o.targetName} — ` +
         `beam attach ${record.id} to watch it, or collect it (beam down ${record.id}) and ` +
         `retire it (beam kill ${record.id} --purge) before re-shipping`,
+    );
+  }
+  // An explicit NEW kickoff can never ride a restart-in-place: the
+  // journaled resume command replays the completed ship's argv verbatim,
+  // so the message would be silently dropped — and the retained remote
+  // generation may hold work a silent re-kick would strand. Refuse with
+  // the fix instead. Re-running the SAME beam up line (same -m) is fine:
+  // that kickoff is already baked into the journaled argv.
+  if (o.requestedKickoff !== undefined && o.requestedKickoff !== record.kickoff) {
+    throw new Error(
+      `handoff ${record.id} already completed its ship on ${o.targetName} — a new --message ` +
+        `cannot be applied to its journaled resume command. beam down ${record.id} collects ` +
+        `the remote work; retire with beam kill ${record.id} --purge, then beam up -m again`,
     );
   }
   // Retained handoff whose agent exited: when the ship journaled its
@@ -906,7 +924,7 @@ async function upExecuteShip(o: UpExecuteShipOptions): Promise<void> {
     stagedSession: staged.stagedSession,
     noStart: o.values["no-start"] === true,
   });
-  upPromoteToUp(ship, { detected: o.detected, started, promoteShipInfo });
+  upPromoteToUp(ship, { detected: o.detected, started, kickoff: o.kickoff, promoteShipInfo });
 }
 
 /**
@@ -1831,6 +1849,7 @@ function upPromoteToUp(
   o: {
     detected: DetectedSession | undefined;
     started: boolean;
+    kickoff: string | undefined;
     promoteShipInfo: WtGitShipInfo | undefined;
   },
 ): void {
@@ -1855,6 +1874,11 @@ function upPromoteToUp(
     console.log(`  glimpse: beam status ${ship.id}`);
     if (o.detected?.adapter.tool === "omp") {
       console.log(`  browser: attach once and run /collab for a web link`);
+    }
+    // The most common "beam never worked": a resumed agent with no prompt
+    // waits at its input box forever, looking dead from the outside.
+    if (o.kickoff === undefined) {
+      console.log(`  note:    no kickoff message — the agent idles until you attach or re-up -m`);
     }
   } else {
     if (o.detected) {

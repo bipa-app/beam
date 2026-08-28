@@ -227,6 +227,22 @@ describe.skipIf(!HAVE_DEPS)(
     }, ROUND_TRIP_TIMEOUT_MS);
 
     test(
+      "a NEW --message on a completed handoff refuses instead of silently dropping it",
+      async () => {
+        // The restart-in-place path replays the journaled resume argv
+        // verbatim; an explicit different kickoff cannot ride it and must
+        // refuse with the retire-first fix, never be silently ignored.
+        await expect(cmdUp(["--no-start", "-m", "a different kickoff"])).rejects.toThrow(
+          /a new --message cannot be applied/,
+        );
+        const record = theRecord();
+        expect(record.kickoff).toBe("first kickoff"); // journaled kickoff untouched
+        expect(record.status).toBe("up");
+      },
+      ROUND_TRIP_TIMEOUT_MS,
+    );
+
+    test(
       "up resolves the retained target snapshot after config removal and still refuses re-shipping",
       async () => {
         writeFileSync(join(beamDir, "config.json"), JSON.stringify({ targets: {} }));
