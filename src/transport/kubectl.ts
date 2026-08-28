@@ -1,9 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { run, runChecked, shjoin, shq, shqRemotePath } from "../util/shell.ts";
 import { ownedDestinationScript, ownerGuardScript } from "../workspace.ts";
+import { fileSha256 } from "../util/digest.ts";
 import type { ExecResult, SyncOptions, Transport } from "./types.ts";
 
 /** Where a kubectl-reached sandbox lives. Every argv pins all of these. */
@@ -39,6 +40,8 @@ export interface KubectlCoords {
  */
 export const SYNC_MARKER_VERSION = "beam kubectl sync v1";
 const SYNC_MARKER_DIRS = [".beam", "transport", "kubectl-synced"];
+const SYNC_DOWN_ARCHIVE_ATTEMPTS_MAX = 3;
+const SYNC_DOWN_ARCHIVE_BYTES_MAX = 128 * 1024 * 1024 * 1024;
 
 export interface SyncMarker {
   /** Normalized destination this license is keyed to. */
@@ -674,6 +677,77 @@ export class KubectlTransport implements Transport {
     return (await this.probeLicense(remoteDir)).valid;
   }
 
+  private async extractRemoteArchive(
+    prelude: string,
+    staging: string,
+    verbose: boolean,
+  ): Promise<void> {
+    const nonce = randomBytes(16).toString("hex");
+    const remoteArchive = `/tmp/beam-syncdown-${nonce}.tar.gz`;
+    const localArchive = join(tmpdir(), `beam-syncdown-local-${nonce}.tar.gz`);
+    try {
+      const receipt = await this.execChecked(
+        [
+          prelude,
+          `/usr/bin/tar -czf ${shq(remoteArchive)} -C . .`,
+          `printf '%s %s\\n' "$(sha256sum ${shq(remoteArchive)} | cut -d ' ' -f1)" ` +
+            `"$(/usr/bin/wc -c < ${shq(remoteArchive)})"`,
+        ].join("\n"),
+      );
+      const match = /^([0-9a-f]{64})\s+([0-9]+)$/.exec(receipt.trim());
+      if (match === null) {
+        throw new Error(`remote sync archive returned an invalid receipt: ${receipt.trim()}`);
+      }
+      const expectedDigest = match[1]!;
+      const expectedBytes = Number(match[2]);
+      if (!Number.isSafeInteger(expectedBytes) || expectedBytes > SYNC_DOWN_ARCHIVE_BYTES_MAX) {
+        throw new Error(`remote sync archive size is invalid: ${match[2]} bytes`);
+      }
+      let downloaded = false;
+      let lastFailure = "no download attempt completed";
+      for (let attempt = 1; attempt <= SYNC_DOWN_ARCHIVE_ATTEMPTS_MAX; attempt += 1) {
+        rmSync(localArchive, { force: true });
+        try {
+          await this.pipeline(
+            this.execArgv(`cat ${shq(remoteArchive)}`),
+            ["bash", "-c", `cat > ${shq(localArchive)}`],
+            false,
+          );
+        } catch (error) {
+          lastFailure = `attempt ${attempt}: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+          continue;
+        }
+        const actualBytes = statSync(localArchive).size;
+        if (actualBytes !== expectedBytes) {
+          lastFailure = `attempt ${attempt}: expected ${expectedBytes} bytes, got ${actualBytes}`;
+          continue;
+        }
+        const actualDigest = fileSha256(localArchive);
+        if (actualDigest !== expectedDigest) {
+          lastFailure =
+            `attempt ${attempt}: expected sha256 ${expectedDigest}, got ${actualDigest}`;
+          continue;
+        }
+        downloaded = true;
+        break;
+      }
+      if (!downloaded) {
+        throw new Error(
+          `remote sync archive failed ${SYNC_DOWN_ARCHIVE_ATTEMPTS_MAX} verified downloads: ` +
+            lastFailure,
+        );
+      }
+      await runChecked([
+        "tar", "-xzf", localArchive, ...(verbose ? ["-v"] : []), "-C", staging,
+      ], { interactive: verbose });
+    } finally {
+      rmSync(localArchive, { force: true });
+      await this.execChecked(`rm -f -- ${shq(remoteArchive)}`);
+    }
+  }
+
   async syncDown(remoteDir: string, localDir: string, opts: SyncOptions = {}): Promise<void> {
     // An OWNED collection uses the fused destination descent in the SAME
     // shell that reads the tree — owner verified while holding `.beam`,
@@ -715,11 +789,7 @@ export class KubectlTransport implements Transport {
         opts.owned === undefined
           ? pinExisting
           : ownedDestPrelude(remoteDir, opts.owned, { create: false });
-      await this.pipeline(
-        this.execArgv(`${prelude}\n/usr/bin/tar -czf - -C . .`),
-        ["tar", "-xzf", "-", ...(opts.verbose ? ["-v"] : []), "-C", staging],
-        opts.verbose === true,
-      );
+      await this.extractRemoteArchive(prelude, staging, opts.verbose === true);
       // A workspace swapped WHILE the stream ran must not reach the local
       // tree: re-prove ownership before the first local byte changes.
       if (rootGuard) await this.execChecked(rootGuard);
