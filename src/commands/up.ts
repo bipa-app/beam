@@ -1114,7 +1114,7 @@ const STAGED_TRANSCRIPT = "transcript.jsonl";
 const STAGED_ARTIFACTS = "artifacts";
 
 /** Root of a record's Beam-private session bundle stages. */
-function sessionStageRoot(env: BeamEnv, id: string): string {
+export function sessionStageRoot(env: BeamEnv, id: string): string {
   return join(env.beamDir, "ship-stage", id);
 }
 

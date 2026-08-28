@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
   configPath,
@@ -41,6 +42,19 @@ import {
   type ProbeRecord,
 } from "../security.ts";
 import { run, shjoin, shq, shqRemotePath } from "../util/shell.ts";
+import { sessionStageRoot } from "./up.ts";
+
+/**
+ * Terminal `killed` write. The pending-ship journal dies with the handoff,
+ * and its local session stage — whose only referent was that journal — is
+ * reaped with it. Flip first, then reap: a crash between the two leaves a
+ * terminal record with a stray stage, never a journal pointing at a
+ * deleted stage.
+ */
+function killFinalize(env: BeamEnv, id: string): void {
+  updateRecord(env, id, { status: "killed", shipPending: undefined });
+  rmSync(sessionStageRoot(env, id), { recursive: true, force: true });
+}
 
 /** beam init — write a sample config when none exists. */
 export async function cmdInit(): Promise<void> {
@@ -303,7 +317,7 @@ async function killPurge(context: KillContext): Promise<void> {
     // failed: journal the destroy-only phase and delete the claim.
     updateRecord(env, record.id, { status: "killing" });
     await provider.destroy(record);
-    updateRecord(env, record.id, { status: "killed" });
+    killFinalize(env, record.id);
     console.log(`abandoned ${record.id} (nothing was ever shipped)`);
     return;
   }
@@ -378,7 +392,7 @@ async function killPurgeConnect(
         "finishing the destroy by claim identity",
     );
     await provider.destroyAfterVerifiedCleanupWithoutConnection(record);
-    updateRecord(env, record.id, { status: "killed" });
+    killFinalize(env, record.id);
     console.log(`purged ${record.remoteCwd}`);
     return undefined;
   }
@@ -452,7 +466,7 @@ async function killPurgeErase(
   // root); `killing` is already journaled, so an interrupted destroy
   // retries through the same checked path.
   await provider.destroy(record);
-  updateRecord(env, record.id, { status: "killed" });
+  killFinalize(env, record.id);
   console.log(
     isRemoteCwdResolved(record)
       ? `purged ${record.remoteCwd}`
