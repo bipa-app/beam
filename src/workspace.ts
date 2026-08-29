@@ -1294,6 +1294,8 @@ export function enterWorkspaceScript(remoteCwd: string): string {
  * ------------------------------------------------------------------------
  */
 
+const WORKSPACE_PUBLISH_HEARTBEAT_ENTRY_COUNT = 128;
+
 /** Guard an upload-stage generation as one safe path component (a journaled workspace digest). */
 function assertUploadGeneration(generation: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(generation)) {
@@ -1432,6 +1434,12 @@ function publishWorkspaceUploadStageShellLines(): string[] {
     '  __beam_pw_do=$(__beam_pw_perm "$(printf %s "$1" | cut -c8-10)") || exit 81',
     '  printf "u=%s,g=%s,o=%s" "$__beam_pw_du" "$__beam_pw_dg" "$__beam_pw_do"',
     "}",
+    "__beam_pw_tick() {",
+    "  __beam_pw_progress=$((__beam_pw_progress + 1))",
+    `  if [ $((__beam_pw_progress % ${WORKSPACE_PUBLISH_HEARTBEAT_ENTRY_COUNT})) -eq 0 ]; then`,
+    `    printf 'beam: workspace publish heartbeat %s %s\\n' "$1" "$__beam_pw_progress" >&2`,
+    "  fi",
+    "}",
   ];
 }
 
@@ -1443,6 +1451,7 @@ function publishWorkspaceUploadStageShellLines(): string[] {
  */
 function publishWorkspaceUploadStageDirPassLines(): string[] {
   return [
+    "__beam_pw_progress=0",
     'find "$__beam_pw_root" -type d -print | LC_ALL=C sort | {',
     "  while IFS= read -r __beam_pw_p; do",
     '    [ "$__beam_pw_p" = "$__beam_pw_root" ] && continue',
@@ -1464,6 +1473,7 @@ function publishWorkspaceUploadStageDirPassLines(): string[] {
       ' real directory — refusing the publish (nothing was overwritten)" >&2; exit 79',
     "      fi",
     "    ) || exit $?",
+    "    __beam_pw_tick directories",
     "  done",
     "} || exit $?",
   ];
@@ -1477,6 +1487,7 @@ function publishWorkspaceUploadStageDirPassLines(): string[] {
  */
 function publishWorkspaceUploadStageFilePassLines(): string[] {
   return [
+    "__beam_pw_progress=0",
     'find "$__beam_pw_root" -type f -print | {',
     "  while IFS= read -r __beam_pw_p; do",
     '    __beam_pw_r=${__beam_pw_p#"$__beam_pw_root"/}',
@@ -1505,6 +1516,7 @@ function publishWorkspaceUploadStageFilePassLines(): string[] {
       ' refusing the publish (nothing was overwritten)" >&2; exit 79; fi',
     "      fi",
     "    ) || exit $?",
+    "    __beam_pw_tick files",
     "  done",
     "} || exit $?",
   ];
@@ -1516,6 +1528,7 @@ function publishWorkspaceUploadStageFilePassLines(): string[] {
  */
 function publishWorkspaceUploadStageLinkPassLines(): string[] {
   return [
+    "__beam_pw_progress=0",
     'find "$__beam_pw_root" -type l -print | {',
     "  while IFS= read -r __beam_pw_p; do",
     '    __beam_pw_r=${__beam_pw_p#"$__beam_pw_root"/}',
@@ -1536,6 +1549,7 @@ function publishWorkspaceUploadStageLinkPassLines(): string[] {
       ' target — refusing the publish (nothing was overwritten)" >&2; exit 79; }',
     "      fi",
     "    ) || exit $?",
+    "    __beam_pw_tick links",
     "  done",
     "} || exit $?",
   ];
