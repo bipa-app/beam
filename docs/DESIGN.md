@@ -408,7 +408,12 @@ payload) plus explicit per-path session transfers; three on `down` (`.git`
 quarantine, workspace stage, session collect). Bytes on the ssh transport ≈
 changed bytes (rsync delta) + file-list overhead; on the kubectl transport ≈
 the **whole** tree, compressed, on every sync — tar has no delta, so a
-re-ship costs a full copy and empties the destination first. A git workspace
+re-ship costs a full copy and empties the destination first. kubectl bulk
+transfers stage ONE archive per direction, bind it to a size+sha256
+receipt, and retry the raw copy up to `SYNC_ARCHIVE_ATTEMPTS_MAX` (6)
+times before extracting — the GKE gVisor exec stream was measured
+corrupting ~1 in 3 large transfers (2026-08-29), and extraction must only
+ever read a verified archive. A git workspace
 also ships its full object closure (`clone --no-hardlinks --dissociate`), so
 worst-case outbound ≈ workspace bytes + repository bytes, and a return
 collects the same again. **Bound: one batched transfer per logical payload;

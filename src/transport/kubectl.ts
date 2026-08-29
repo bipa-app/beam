@@ -40,8 +40,33 @@ export interface KubectlCoords {
  */
 export const SYNC_MARKER_VERSION = "beam kubectl sync v1";
 const SYNC_MARKER_DIRS = [".beam", "transport", "kubectl-synced"];
-const SYNC_DOWN_ARCHIVE_ATTEMPTS_MAX = 3;
+// Bulk archives retry until a size+sha-verified copy lands: the GKE gVisor
+// exec stream was measured (2026-08-29, static 94 MiB file) corrupting
+// ~1 in 3 large transfers, so 3 attempts still failed whole commands;
+// 6 puts the residual per-transfer failure odds near 0.2%.
+const SYNC_ARCHIVE_ATTEMPTS_MAX = 6;
 const SYNC_DOWN_ARCHIVE_BYTES_MAX = 128 * 1024 * 1024 * 1024;
+
+/** The `<sha256> <bytes>` receipt both verified transfer directions parse. */
+function parseArchiveReceipt(receipt: string): { digest: string; bytes: number } {
+  const match = /^([0-9a-f]{64})\s+([0-9]+)$/.exec(receipt.trim());
+  if (match === null) {
+    throw new Error(`remote sync archive returned an invalid receipt: ${receipt.trim()}`);
+  }
+  const bytes = Number(match[2]);
+  if (!Number.isSafeInteger(bytes)) {
+    throw new Error(`remote sync archive size is invalid: ${match[2]} bytes`);
+  }
+  return { digest: match[1]!, bytes };
+}
+
+/** Shell fragment printing the `<sha256> <bytes>` receipt of one remote file. */
+function archiveReceiptScript(remoteArchive: string): string {
+  return (
+    `printf '%s %s\\n' "$(sha256sum ${shq(remoteArchive)} | cut -d ' ' -f1)" ` +
+    `"$(/usr/bin/wc -c < ${shq(remoteArchive)})"`
+  );
+}
 
 export interface SyncMarker {
   /** Normalized destination this license is keyed to. */
@@ -587,13 +612,85 @@ export class KubectlTransport implements Transport {
             '\n[ -n "$(find . -prune -perm 700)" ]' +
             " || { echo 'beam: the reserved dir mode did not verify' >&2; exit 66; }"
           : "";
-      await this.pipeline(
-        ["tar", "-czf", "-", ...(opts.verbose ? ["-v"] : []), "-C", staging, "."],
-        this.execArgv(`set -e\n${prelude}\n/usr/bin/tar -xzf - -C .${tighten}`, { stdin: true }),
-        opts.verbose === true,
-      );
+      await this.uploadArchiveVerified({
+        staging,
+        prelude,
+        tighten,
+        verbose: opts.verbose === true,
+      });
     } finally {
       rmSync(staging, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Verified upload: archive the staged tree locally, bind its size and
+   * sha256, and land it in remote /tmp through bounded stdin attempts —
+   * the lossy exec stream is caught by the remote receipt, never by the
+   * extraction. Only a byte-verified archive is extracted, inside the
+   * SAME guarded shell (pin or fused owned descent) the streaming path
+   * used, so a dropped chunk can never plant a truncated tree in the
+   * workspace.
+   */
+  private async uploadArchiveVerified(step: {
+    staging: string;
+    prelude: string;
+    tighten: string;
+    verbose: boolean;
+  }): Promise<void> {
+    const nonce = randomBytes(16).toString("hex");
+    const remoteArchive = `/tmp/beam-syncup-${nonce}.tar.gz`;
+    const localArchive = join(tmpdir(), `beam-syncup-local-${nonce}.tar.gz`);
+    try {
+      await runChecked(
+        ["tar", "-czf", localArchive, ...(step.verbose ? ["-v"] : []), "-C", step.staging, "."],
+        { interactive: step.verbose },
+      );
+      const expectedBytes = statSync(localArchive).size;
+      const expectedDigest = fileSha256(localArchive);
+      let uploaded = false;
+      let lastFailure = "no upload attempt completed";
+      for (let attempt = 1; attempt <= SYNC_ARCHIVE_ATTEMPTS_MAX; attempt += 1) {
+        try {
+          // `cat >` truncates, so every attempt rewrites the whole file.
+          await this.pipeline(
+            ["cat", localArchive],
+            this.execArgv(`cat > ${shq(remoteArchive)}`, { stdin: true }),
+            false,
+          );
+        } catch (error) {
+          lastFailure = `attempt ${attempt}: ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+          continue;
+        }
+        const landed = parseArchiveReceipt(
+          await this.execChecked(archiveReceiptScript(remoteArchive)),
+        );
+        if (landed.bytes !== expectedBytes) {
+          lastFailure = `attempt ${attempt}: expected ${expectedBytes} bytes, got ${landed.bytes}`;
+          continue;
+        }
+        if (landed.digest !== expectedDigest) {
+          lastFailure =
+            `attempt ${attempt}: expected sha256 ${expectedDigest}, got ${landed.digest}`;
+          continue;
+        }
+        uploaded = true;
+        break;
+      }
+      if (!uploaded) {
+        throw new Error(
+          `remote sync archive failed ${SYNC_ARCHIVE_ATTEMPTS_MAX} verified uploads: ` +
+            lastFailure,
+        );
+      }
+      await this.execChecked(
+        `set -e\n${step.prelude}\n/usr/bin/tar -xzf ${shq(remoteArchive)} -C .${step.tighten}`,
+      );
+    } finally {
+      rmSync(localArchive, { force: true });
+      await this.execChecked(`rm -f -- ${shq(remoteArchive)}`);
     }
   }
 
@@ -690,22 +787,18 @@ export class KubectlTransport implements Transport {
         [
           prelude,
           `/usr/bin/tar -czf ${shq(remoteArchive)} -C . .`,
-          `printf '%s %s\\n' "$(sha256sum ${shq(remoteArchive)} | cut -d ' ' -f1)" ` +
-            `"$(/usr/bin/wc -c < ${shq(remoteArchive)})"`,
+          archiveReceiptScript(remoteArchive),
         ].join("\n"),
       );
-      const match = /^([0-9a-f]{64})\s+([0-9]+)$/.exec(receipt.trim());
-      if (match === null) {
-        throw new Error(`remote sync archive returned an invalid receipt: ${receipt.trim()}`);
+      const staged = parseArchiveReceipt(receipt);
+      if (staged.bytes > SYNC_DOWN_ARCHIVE_BYTES_MAX) {
+        throw new Error(`remote sync archive size is invalid: ${staged.bytes} bytes`);
       }
-      const expectedDigest = match[1]!;
-      const expectedBytes = Number(match[2]);
-      if (!Number.isSafeInteger(expectedBytes) || expectedBytes > SYNC_DOWN_ARCHIVE_BYTES_MAX) {
-        throw new Error(`remote sync archive size is invalid: ${match[2]} bytes`);
-      }
+      const expectedDigest = staged.digest;
+      const expectedBytes = staged.bytes;
       let downloaded = false;
       let lastFailure = "no download attempt completed";
-      for (let attempt = 1; attempt <= SYNC_DOWN_ARCHIVE_ATTEMPTS_MAX; attempt += 1) {
+      for (let attempt = 1; attempt <= SYNC_ARCHIVE_ATTEMPTS_MAX; attempt += 1) {
         rmSync(localArchive, { force: true });
         try {
           await this.pipeline(
@@ -735,7 +828,7 @@ export class KubectlTransport implements Transport {
       }
       if (!downloaded) {
         throw new Error(
-          `remote sync archive failed ${SYNC_DOWN_ARCHIVE_ATTEMPTS_MAX} verified downloads: ` +
+          `remote sync archive failed ${SYNC_ARCHIVE_ATTEMPTS_MAX} verified downloads: ` +
             lastFailure,
         );
       }
