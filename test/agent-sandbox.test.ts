@@ -82,11 +82,46 @@ if (args.includes("exec") && args.includes("--")) {
   if (existsSync(failFile) && cmd.join(" ").includes(readFileSync(failFile, "utf8").trim())) {
     die("canned exec failure");
   }
+  // Lossy-stream chaos (the measured gVisor failure mode): a countdown
+  // flag file "corrupt-stdout" / "corrupt-stdin" holding "<n> <pattern>"
+  // makes the next n matching exec invocations silently drop the tail of
+  // that stream — kubectl still exits 0, exactly like the real cluster.
+  const chaosTake = (file) => {
+    const p = join(STATE, file);
+    if (!existsSync(p)) return false;
+    const raw = readFileSync(p, "utf8").trim();
+    const space = raw.indexOf(" ");
+    const count = Number(raw.slice(0, space));
+    const pattern = raw.slice(space + 1);
+    if (!(count > 0) || !cmd.join(" ").includes(pattern)) return false;
+    writeFileSync(p, String(count - 1) + " " + pattern);
+    return true;
+  };
   // Pin XDG so herdr's session REGISTRY (~/.config/herdr) lives inside the
   // fixture pod home; runtime SOCKETS live at the uid-scoped tmp dir under
   // unique beam-<id> names, so they never collide with the developer's
   // real herdr server (default session, distinct socket file).
   const podEnv = { ...process.env, HOME: podHome, XDG_CONFIG_HOME: join(podHome, ".config") };
+  if (chaosTake("corrupt-stdin")) {
+    const whole = readFileSync(0);
+    const kept = whole.subarray(0, Math.max(0, whole.length - 4096));
+    const res2 = spawnSync(cmd[0], cmd.slice(1), {
+      stdio: ["pipe", "inherit", "inherit"],
+      input: kept,
+      env: podEnv,
+    });
+    process.exit(res2.status === null ? 1 : res2.status);
+  }
+  if (chaosTake("corrupt-stdout")) {
+    const res2 = spawnSync(cmd[0], cmd.slice(1), {
+      stdio: ["inherit", "pipe", "inherit"],
+      env: podEnv,
+      maxBuffer: 1024 * 1024 * 1024,
+    });
+    const out = res2.stdout || Buffer.alloc(0);
+    process.stdout.write(out.subarray(0, Math.max(0, out.length - 4096)));
+    process.exit(res2.status === null ? 1 : res2.status);
+  }
   const res = spawnSync(cmd[0], cmd.slice(1), { stdio: "inherit", env: podEnv });
   // exec-hook-pattern + exec-hook.sh: run a canned script AFTER a matching
   // command completes — simulates a pod-side agent racing between beam's
@@ -1379,6 +1414,72 @@ describe("kubectl transport", () => {
       expect(readFileSync(join(remote, marker.rel), "utf8")).toBe(marker.content);
     },
   );
+
+  test(
+    "a lossy download stream is retried until a verified archive lands — exact bytes arrive",
+    async () => {
+      const c = makeCluster();
+      const t = cannedTransport("beam-chaos-d", c.bin);
+      const seed = join(c.state, "seed-ws");
+      const local = join(c.state, "local-ws");
+      const remote = join(c.podHome, "data", "ws-chaos-d");
+      mkdirSync(seed, { recursive: true });
+      mkdirSync(local, { recursive: true });
+      writeFileSync(join(seed, "work.txt"), "remote work\n");
+      await t.syncUp(seed, remote, {});
+      // Drop the tail of the next 5 archive downloads: past the old
+      // 3-attempt ceiling, within the current budget — the sixth copy must
+      // come back byte-verified and extract cleanly.
+      c.flag("corrupt-stdout", "5 cat '/tmp/beam-syncdown-");
+      await t.syncDown(remote, local, {});
+      expect(readFileSync(join(local, "work.txt"), "utf8")).toBe("remote work\n");
+    },
+  );
+
+  test("a persistently lossy download fails closed after the bounded attempts", async () => {
+    const c = makeCluster();
+    const t = cannedTransport("beam-chaos-dx", c.bin);
+    const seed = join(c.state, "seed-ws");
+    const local = join(c.state, "local-ws");
+    const remote = join(c.podHome, "data", "ws-chaos-dx");
+    mkdirSync(seed, { recursive: true });
+    mkdirSync(local, { recursive: true });
+    writeFileSync(join(seed, "work.txt"), "remote work\n");
+    await t.syncUp(seed, remote, {});
+    c.flag("corrupt-stdout", "99 cat '/tmp/beam-syncdown-");
+    await expect(t.syncDown(remote, local, {})).rejects.toThrow(/6 verified downloads/);
+    // A truncated stream never reaches extraction: nothing landed locally.
+    expect(existsSync(join(local, "work.txt"))).toBe(false);
+  });
+
+  test(
+    "a lossy upload stream is retried until the remote receipt verifies — then extraction runs",
+    async () => {
+      const c = makeCluster();
+      const t = cannedTransport("beam-chaos-u", c.bin);
+      const local = join(c.state, "local-ws");
+      const remote = join(c.podHome, "data", "ws-chaos-u");
+      mkdirSync(local, { recursive: true });
+      writeFileSync(join(local, "hello.txt"), "hello\n");
+      c.flag("corrupt-stdin", "5 cat > '/tmp/beam-syncup-");
+      await t.syncUp(local, remote, {});
+      expect(readFileSync(join(remote, "hello.txt"), "utf8")).toBe("hello\n");
+    },
+  );
+
+  test("a persistently lossy upload fails closed with the destination untouched", async () => {
+    const c = makeCluster();
+    const t = cannedTransport("beam-chaos-ux", c.bin);
+    const local = join(c.state, "local-ws");
+    const remote = join(c.podHome, "data", "ws-chaos-ux");
+    mkdirSync(local, { recursive: true });
+    writeFileSync(join(local, "hello.txt"), "hello\n");
+    c.flag("corrupt-stdin", "99 cat > '/tmp/beam-syncup-");
+    await expect(t.syncUp(local, remote, {})).rejects.toThrow(/6 verified uploads/);
+    // Extraction only ever reads a verified archive: no truncated tree can
+    // have been planted in the workspace.
+    expect(existsSync(join(remote, "hello.txt"))).toBe(false);
+  });
 
   test(
     "mirrored sync-down without a genuine up marker refuses before touching local files",
