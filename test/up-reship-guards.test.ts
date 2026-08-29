@@ -60,9 +60,11 @@ import {
 import {
   gatherExcludes,
   remoteWorkspaceName,
+  publishWorkspaceUploadStage,
   stageWorkspaceShip,
   stagedWorkspaceTreeFingerprint,
   workspacePublishTestSeam,
+  workspaceUploadStagePath,
 } from "../src/workspace.ts";
 
 const HERDR = Bun.which("herdr");
@@ -1481,6 +1483,43 @@ describe.skipIf(!HAVE_DEPS)(
           expect(readdirSync(join(rc, ".beam", "uploads"))).toEqual([]);
         } finally {
           restoreBeam(iso);
+        }
+      },
+      60_000,
+    );
+
+    test(
+      "a large publish emits bounded heartbeats while preserving every file",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "beam-pubheartbeat-")));
+        const remote = join(root, "remote");
+        const generation = "heartbeat";
+        const owner = "beam-workspace-v1 heartbeat owner";
+        const stage = join(remote, workspaceUploadStagePath(generation));
+        mkdirSync(join(remote, ".beam"), { recursive: true, mode: 0o700 });
+        writeFileSync(join(remote, ".beam", "owner"), owner);
+        mkdirSync(stage, { recursive: true });
+        for (let index = 0; index < 128; index += 1) {
+          writeFileSync(join(stage, `file-${index}.txt`), `content-${index}\n`);
+        }
+
+        class HeartbeatTransport extends LocalTransport {
+          stderr = "";
+
+          override async exec(command: string) {
+            const result = await super.exec(command);
+            this.stderr += result.stderr;
+            return result;
+          }
+        }
+
+        const transport = new HeartbeatTransport(root);
+        try {
+          await publishWorkspaceUploadStage(transport, remote, generation, owner);
+          expect(transport.stderr).toContain("beam: workspace publish heartbeat files 128");
+          expect(readFileSync(join(remote, "file-127.txt"), "utf8")).toBe("content-127\n");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
         }
       },
       60_000,
