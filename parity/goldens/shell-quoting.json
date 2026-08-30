@@ -1,0 +1,487 @@
+{
+  "shq": [
+    {
+      "input": "",
+      "output": "''"
+    },
+    {
+      "input": " ",
+      "output": "' '"
+    },
+    {
+      "input": "  ",
+      "output": "'  '"
+    },
+    {
+      "input": "plain",
+      "output": "'plain'"
+    },
+    {
+      "input": "with space",
+      "output": "'with space'"
+    },
+    {
+      "input": "leading space",
+      "output": "'leading space'"
+    },
+    {
+      "input": "trailing space ",
+      "output": "'trailing space '"
+    },
+    {
+      "input": "'",
+      "output": "''\\'''"
+    },
+    {
+      "input": "''",
+      "output": "''\\'''\\'''"
+    },
+    {
+      "input": "'quoted'",
+      "output": "''\\''quoted'\\'''"
+    },
+    {
+      "input": "it's",
+      "output": "'it'\\''s'"
+    },
+    {
+      "input": "a'b'c",
+      "output": "'a'\\''b'\\''c'"
+    },
+    {
+      "input": "'edge",
+      "output": "''\\''edge'"
+    },
+    {
+      "input": "edge'",
+      "output": "'edge'\\'''"
+    },
+    {
+      "input": "\"",
+      "output": "'\"'"
+    },
+    {
+      "input": "say \"hi\" now",
+      "output": "'say \"hi\" now'"
+    },
+    {
+      "input": "\\",
+      "output": "'\\'"
+    },
+    {
+      "input": "\\\\",
+      "output": "'\\\\'"
+    },
+    {
+      "input": "back\\slash\\path",
+      "output": "'back\\slash\\path'"
+    },
+    {
+      "input": "\\'mixed",
+      "output": "'\\'\\''mixed'"
+    },
+    {
+      "input": "$HOME",
+      "output": "'$HOME'"
+    },
+    {
+      "input": "${HOME}",
+      "output": "'${HOME}'"
+    },
+    {
+      "input": "$(rm -rf /)",
+      "output": "'$(rm -rf /)'"
+    },
+    {
+      "input": "`id`",
+      "output": "'`id`'"
+    },
+    {
+      "input": "!history",
+      "output": "'!history'"
+    },
+    {
+      "input": "a|b",
+      "output": "'a|b'"
+    },
+    {
+      "input": "a;b",
+      "output": "'a;b'"
+    },
+    {
+      "input": "a&&b||c",
+      "output": "'a&&b||c'"
+    },
+    {
+      "input": "a>b<c",
+      "output": "'a>b<c'"
+    },
+    {
+      "input": "*",
+      "output": "'*'"
+    },
+    {
+      "input": "?.[x]!{y}",
+      "output": "'?.[x]!{y}'"
+    },
+    {
+      "input": "brace,{exp,ansion}",
+      "output": "'brace,{exp,ansion}'"
+    },
+    {
+      "input": "line\nbreak",
+      "output": "'line\nbreak'"
+    },
+    {
+      "input": "carriage\rreturn",
+      "output": "'carriage\rreturn'"
+    },
+    {
+      "input": "crlf\r\npair",
+      "output": "'crlf\r\npair'"
+    },
+    {
+      "input": "tab\there",
+      "output": "'tab\there'"
+    },
+    {
+      "input": "bellachar",
+      "output": "'bellachar'"
+    },
+    {
+      "input": "unicode-é-日本語-🚀",
+      "output": "'unicode-é-日本語-🚀'"
+    },
+    {
+      "input": "ø̈ combining",
+      "output": "'ø̈ combining'"
+    },
+    {
+      "input": "-",
+      "output": "'-'"
+    },
+    {
+      "input": "-rf",
+      "output": "'-rf'"
+    },
+    {
+      "input": "--",
+      "output": "'--'"
+    },
+    {
+      "input": "--exclude=*.log",
+      "output": "'--exclude=*.log'"
+    },
+    {
+      "input": "equals=sign",
+      "output": "'equals=sign'"
+    },
+    {
+      "input": "#comment bait",
+      "output": "'#comment bait'"
+    },
+    {
+      "input": "~notleading/tilde",
+      "output": "'~notleading/tilde'"
+    },
+    {
+      "input": "trailing~",
+      "output": "'trailing~'"
+    },
+    {
+      "input": "a~b",
+      "output": "'a~b'"
+    }
+  ],
+  "shqRemotePath": [
+    {
+      "input": "",
+      "output": "''"
+    },
+    {
+      "input": " ",
+      "output": "' '"
+    },
+    {
+      "input": "  ",
+      "output": "'  '"
+    },
+    {
+      "input": "plain",
+      "output": "'plain'"
+    },
+    {
+      "input": "with space",
+      "output": "'with space'"
+    },
+    {
+      "input": "leading space",
+      "output": "'leading space'"
+    },
+    {
+      "input": "trailing space ",
+      "output": "'trailing space '"
+    },
+    {
+      "input": "'",
+      "output": "''\\'''"
+    },
+    {
+      "input": "''",
+      "output": "''\\'''\\'''"
+    },
+    {
+      "input": "'quoted'",
+      "output": "''\\''quoted'\\'''"
+    },
+    {
+      "input": "it's",
+      "output": "'it'\\''s'"
+    },
+    {
+      "input": "a'b'c",
+      "output": "'a'\\''b'\\''c'"
+    },
+    {
+      "input": "'edge",
+      "output": "''\\''edge'"
+    },
+    {
+      "input": "edge'",
+      "output": "'edge'\\'''"
+    },
+    {
+      "input": "\"",
+      "output": "'\"'"
+    },
+    {
+      "input": "say \"hi\" now",
+      "output": "'say \"hi\" now'"
+    },
+    {
+      "input": "\\",
+      "output": "'\\'"
+    },
+    {
+      "input": "\\\\",
+      "output": "'\\\\'"
+    },
+    {
+      "input": "back\\slash\\path",
+      "output": "'back\\slash\\path'"
+    },
+    {
+      "input": "\\'mixed",
+      "output": "'\\'\\''mixed'"
+    },
+    {
+      "input": "$HOME",
+      "output": "'$HOME'"
+    },
+    {
+      "input": "${HOME}",
+      "output": "'${HOME}'"
+    },
+    {
+      "input": "$(rm -rf /)",
+      "output": "'$(rm -rf /)'"
+    },
+    {
+      "input": "`id`",
+      "output": "'`id`'"
+    },
+    {
+      "input": "!history",
+      "output": "'!history'"
+    },
+    {
+      "input": "a|b",
+      "output": "'a|b'"
+    },
+    {
+      "input": "a;b",
+      "output": "'a;b'"
+    },
+    {
+      "input": "a&&b||c",
+      "output": "'a&&b||c'"
+    },
+    {
+      "input": "a>b<c",
+      "output": "'a>b<c'"
+    },
+    {
+      "input": "*",
+      "output": "'*'"
+    },
+    {
+      "input": "?.[x]!{y}",
+      "output": "'?.[x]!{y}'"
+    },
+    {
+      "input": "brace,{exp,ansion}",
+      "output": "'brace,{exp,ansion}'"
+    },
+    {
+      "input": "line\nbreak",
+      "output": "'line\nbreak'"
+    },
+    {
+      "input": "carriage\rreturn",
+      "output": "'carriage\rreturn'"
+    },
+    {
+      "input": "crlf\r\npair",
+      "output": "'crlf\r\npair'"
+    },
+    {
+      "input": "tab\there",
+      "output": "'tab\there'"
+    },
+    {
+      "input": "bellachar",
+      "output": "'bellachar'"
+    },
+    {
+      "input": "unicode-é-日本語-🚀",
+      "output": "'unicode-é-日本語-🚀'"
+    },
+    {
+      "input": "ø̈ combining",
+      "output": "'ø̈ combining'"
+    },
+    {
+      "input": "-",
+      "output": "'-'"
+    },
+    {
+      "input": "-rf",
+      "output": "'-rf'"
+    },
+    {
+      "input": "--",
+      "output": "'--'"
+    },
+    {
+      "input": "--exclude=*.log",
+      "output": "'--exclude=*.log'"
+    },
+    {
+      "input": "equals=sign",
+      "output": "'equals=sign'"
+    },
+    {
+      "input": "#comment bait",
+      "output": "'#comment bait'"
+    },
+    {
+      "input": "~notleading/tilde",
+      "output": "'~notleading/tilde'"
+    },
+    {
+      "input": "trailing~",
+      "output": "'trailing~'"
+    },
+    {
+      "input": "a~b",
+      "output": "'a~b'"
+    },
+    {
+      "input": "~",
+      "output": "\"$HOME\""
+    },
+    {
+      "input": "~/",
+      "output": "\"$HOME/\""
+    },
+    {
+      "input": "~/plain",
+      "output": "\"$HOME/plain\""
+    },
+    {
+      "input": "~/with space",
+      "output": "\"$HOME/with space\""
+    },
+    {
+      "input": "~/nested/deep/path",
+      "output": "\"$HOME/nested/deep/path\""
+    },
+    {
+      "input": "~/it's",
+      "output": "\"$HOME/it's\""
+    },
+    {
+      "input": "~/quote'mid",
+      "output": "\"$HOME/quote'mid\""
+    },
+    {
+      "input": "~/$HOME",
+      "output": "\"$HOME/\\$HOME\""
+    },
+    {
+      "input": "~/$(id)",
+      "output": "\"$HOME/\\$(id)\""
+    },
+    {
+      "input": "~/`id`",
+      "output": "\"$HOME/\\`id\\`\""
+    },
+    {
+      "input": "~/has\"double",
+      "output": "\"$HOME/has\\\"double\""
+    },
+    {
+      "input": "~/back\\slash",
+      "output": "\"$HOME/back\\\\slash\""
+    },
+    {
+      "input": "~/all\\of\"$`them",
+      "output": "\"$HOME/all\\\\of\\\"\\$\\`them\""
+    },
+    {
+      "input": "~/glob/*bait",
+      "output": "\"$HOME/glob/*bait\""
+    },
+    {
+      "input": "~/line\nbreak",
+      "output": "\"$HOME/line\nbreak\""
+    },
+    {
+      "input": "~~",
+      "output": "'~~'"
+    },
+    {
+      "input": "~root/looks-like-tilde-user",
+      "output": "'~root/looks-like-tilde-user'"
+    }
+  ],
+  "shjoin": [
+    {
+      "argv": [],
+      "output": ""
+    },
+    {
+      "argv": [
+        ""
+      ],
+      "output": "''"
+    },
+    {
+      "argv": [
+        "git",
+        "update-ref",
+        "--stdin"
+      ],
+      "output": "'git' 'update-ref' '--stdin'"
+    },
+    {
+      "argv": [
+        "a b",
+        "'c'",
+        "$d",
+        ""
+      ],
+      "output": "'a b' ''\\''c'\\''' '$d' ''"
+    }
+  ]
+}

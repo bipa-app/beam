@@ -1,0 +1,73 @@
+{
+  "oneShot": {
+    "bytes": "Beam says: byte-exact or bust.\n",
+    "sha256": "e5db69d28add3cc1768b25795c40e502762858a0e8145b735b02a9ed0c5eb646"
+  },
+  "multiChunk": {
+    "size": 5432,
+    "results": [
+      {
+        "chunkBytes": 1,
+        "sha256": "90479e7c8c3024f227456516c581b03d8342846b3e47fae8d8f7e74c67a4aaa0"
+      },
+      {
+        "chunkBytes": 2,
+        "sha256": "90479e7c8c3024f227456516c581b03d8342846b3e47fae8d8f7e74c67a4aaa0"
+      },
+      {
+        "chunkBytes": 3,
+        "sha256": "90479e7c8c3024f227456516c581b03d8342846b3e47fae8d8f7e74c67a4aaa0"
+      },
+      {
+        "chunkBytes": 7,
+        "sha256": "90479e7c8c3024f227456516c581b03d8342846b3e47fae8d8f7e74c67a4aaa0"
+      },
+      {
+        "chunkBytes": 64,
+        "sha256": "90479e7c8c3024f227456516c581b03d8342846b3e47fae8d8f7e74c67a4aaa0"
+      },
+      {
+        "chunkBytes": 1024,
+        "sha256": "90479e7c8c3024f227456516c581b03d8342846b3e47fae8d8f7e74c67a4aaa0"
+      }
+    ]
+  },
+  "treeSha256": "258cd417cc6ff9dd85689293c3cbf0716cfc1e0e0faec020b91ae2bac247a601",
+  "treeManifest": [
+    {
+      "path": "alpha.txt",
+      "kind": "file",
+      "mode": 493
+    },
+    {
+      "path": "empty-dir",
+      "kind": "dir",
+      "mode": 493
+    },
+    {
+      "path": "empty-dir/.keep",
+      "kind": "file",
+      "mode": 420
+    },
+    {
+      "path": "linked-beta",
+      "kind": "link",
+      "target": "nested/beta.txt"
+    },
+    {
+      "path": "nested",
+      "kind": "dir",
+      "mode": 493
+    },
+    {
+      "path": "nested/beta.txt",
+      "kind": "file",
+      "mode": 420
+    },
+    {
+      "path": "one-shot.txt",
+      "kind": "file",
+      "mode": 420
+    }
+  ]
+}

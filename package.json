@@ -10,6 +10,7 @@
   "scripts": {
     "beam": "bun src/cli.ts",
     "style": "bun scripts/check-style.ts",
+    "parity": "bun scripts/parity-goldens.ts --check",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit"
   },

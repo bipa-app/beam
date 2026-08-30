@@ -6,3 +6,12 @@ rust-version = "1.98"
 description = "Hand off a live coding-agent session to a remote sandbox — and bring it back."
 license = "MIT"
 repository = "https://github.com/bipa-app/beam"
+[dependencies]
+# Allowlist (docs/DESIGN.md: Rust port (transition record)) — exact versions
+# are pinned by the committed Cargo.lock.
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
