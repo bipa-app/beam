@@ -1,10 +1,8 @@
 /**
- * Goal: `beam doctor`'s remote checks run as ONE fused script per battery
- * whose sentinel-framed stdout parses into per-probe verdicts — privilege
- * postures and adapter auth probes surface as WARNING/MISSING lines with
- * their remedies, the remote round-trip count stays constant across the
- * adapter roster and probe outcomes, and truncated or hostile frames fail
- * closed instead of manufacturing a clean bill of health.
+ * Goal: `beam check` runs one fused remote script per battery. Its
+ * sentinel-framed stdout becomes per-probe verdicts, privilege and auth
+ * problems surface with remedies, round trips stay constant across the
+ * adapter roster, and truncated or hostile frames fail closed.
  *
  * Method: a counting Transport double returns canned fused stdout routed
  * by the sentinel embedded in each script (postures cannot be reproduced
@@ -16,7 +14,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DOCTOR_SENTINEL, doctorRemoteChecks } from "../src/commands/misc.ts";
+import { CHECK_SENTINEL, checkRemoteReadiness } from "../src/commands/misc.ts";
 import { PRIVILEGE_SENTINEL } from "../src/security.ts";
 import { ADAPTERS } from "../src/session/index.ts";
 import { LocalTransport } from "../src/transport/local.ts";
@@ -44,23 +42,23 @@ const BENIGN_PRIVILEGE: Rec[] = [
 ];
 
 /**
- * Counting double for the fused doctor flow. Each exec is routed by the
- * sentinel embedded in its script, so the test also proves doctor sends
+ * Counting double for the fused check flow. Each exec is routed by the
+ * sentinel embedded in its script, so the test also proves the check sends
  * exactly one script per battery — the count can never scale with the
  * adapter roster or probe outcomes.
  */
-class CannedDoctorTransport implements Transport {
+class CannedCheckTransport implements Transport {
   readonly label = "canned";
   execCount = 0;
   privilegeCount = 0;
   constructor(
-    private readonly doctor: ExecResult,
+    private readonly check: ExecResult,
     private readonly privilege: ExecResult,
   ) {}
 
   async exec(command: string): Promise<ExecResult> {
     this.execCount++;
-    if (command.includes(DOCTOR_SENTINEL)) return this.doctor;
+    if (command.includes(CHECK_SENTINEL)) return this.check;
     if (command.includes(PRIVILEGE_SENTINEL)) {
       this.privilegeCount++;
       return this.privilege;
@@ -69,7 +67,7 @@ class CannedDoctorTransport implements Transport {
   }
 
   async execChecked(): Promise<string> {
-    throw new Error("not used by doctor");
+    throw new Error("not used by check");
   }
   async syncUp(_l: string, _r: string, _o?: SyncOptions): Promise<void> {}
   async syncDown(_r: string, _l: string, _o?: SyncOptions): Promise<void> {}
@@ -81,20 +79,27 @@ class CannedDoctorTransport implements Transport {
   }
 }
 
-function canned(doctorRecords: Rec[], privilegeRecords: Rec[] = BENIGN_PRIVILEGE) {
-  return new CannedDoctorTransport(
-    { code: 0, stdout: fused(DOCTOR_SENTINEL, doctorRecords), stderr: "" },
+function canned(checkRecords: Rec[], privilegeRecords: Rec[] = BENIGN_PRIVILEGE) {
+  return new CannedCheckTransport(
+    { code: 0, stdout: fused(CHECK_SENTINEL, checkRecords), stderr: "" },
     { code: 0, stdout: fused(PRIVILEGE_SENTINEL, privilegeRecords), stderr: "" },
   );
 }
 
 /**
- * Doctor records for a uniform adapter outcome. `installed` plants a
+ * Check records for a uniform adapter outcome. `installed` plants a
  * binary path per adapter; auth records appear if and only if the adapter
  * defines a probe and its binary resolved — the shape the parser demands.
  */
-function doctorRecords(opts: { installed: boolean; authCode?: number; rootCode?: number }): Rec[] {
+function checkRecords(opts: {
+  installed: boolean;
+  authCode?: number;
+  rootCode?: number;
+  image?: string | null;
+}): Rec[] {
+  const image = opts.image === undefined ? "test-release" : opts.image;
   const records: Rec[] = [
+    ["image", image === null ? 1 : 0, image ?? ""],
     ["tool.rsync", opts.installed ? 0 : 1, opts.installed ? "/usr/bin/rsync" : ""],
     ["tool.herdr", opts.installed ? 0 : 1, opts.installed ? "/usr/bin/herdr" : ""],
   ];
@@ -126,27 +131,43 @@ async function captureLog<T>(fn: () => Promise<T>): Promise<{ value: T; lines: s
   }
 }
 
+function captureReadiness(
+  transport: Transport,
+  options: { name?: string; requireCodingImage?: boolean; root?: string } = {},
+): Promise<{ value: boolean; lines: string[] }> {
+  return captureLog(() =>
+    checkRemoteReadiness(transport, {
+      name: options.name ?? "prod",
+      root: options.root ?? "~/beam",
+      ...(options.requireCodingImage === undefined
+        ? {}
+        : { requireCodingImage: options.requireCodingImage }),
+    }),
+  );
+}
+
 const pad = (b: string) => " ".repeat(Math.max(1, 6 - b.length));
 
-describe("doctor remote checks (fused)", () => {
+describe("remote readiness checks (fused)", () => {
   test("exactly two execs — constant across adapter roster and probe outcomes", async () => {
-    const everything = canned(doctorRecords({ installed: true }));
-    await captureLog(() => doctorRemoteChecks(everything, "prod", "~/beam"));
+    const everything = canned(checkRecords({ installed: true }));
+    await captureLog(() => checkRemoteReadiness(everything, { name: "prod", root: "~/beam" }));
     expect(everything.execCount).toBe(2);
     expect(everything.privilegeCount).toBe(1);
 
     // Nothing installed: same round-trip count, never one probe per tool.
-    const nothing = canned(doctorRecords({ installed: false }));
-    await captureLog(() => doctorRemoteChecks(nothing, "prod", "~/beam"));
+    const nothing = canned(checkRecords({ installed: false }));
+    await captureLog(() => checkRemoteReadiness(nothing, { name: "prod", root: "~/beam" }));
     expect(nothing.execCount).toBe(2);
   });
 
   test("user-visible lines are preserved exactly (installed + authenticated)", async () => {
-    const t = canned(doctorRecords({ installed: true }));
-    const { value, lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const t = canned(checkRecords({ installed: true }));
+    const { value, lines } = await captureReadiness(t);
     expect(value).toBe(true);
     const expected = [
       "  connectivity: ok",
+      "  coding image: test-release",
       "  remote rsync: /usr/bin/rsync",
       "  remote herdr: /usr/bin/herdr",
       ...ADAPTERS.map(
@@ -161,8 +182,8 @@ describe("doctor remote checks (fused)", () => {
   });
 
   test("a failed auth probe points at beam login with the adapter's tool", async () => {
-    const t = canned(doctorRecords({ installed: true, authCode: 1 }));
-    const { lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const t = canned(checkRecords({ installed: true, authCode: 1 }));
+    const { lines } = await captureReadiness(t);
     for (const adapter of ADAPTERS) {
       const line = lines.find((l) => l.startsWith(`  remote ${adapter.binary}:`));
       if (adapter.remoteAuthProbe) {
@@ -179,8 +200,8 @@ describe("doctor remote checks (fused)", () => {
   });
 
   test("missing tools and harnesses render MISSING / not installed", async () => {
-    const t = canned(doctorRecords({ installed: false }));
-    const { lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const t = canned(checkRecords({ installed: false }));
+    const { lines } = await captureReadiness(t);
     expect(lines).toContain("  remote rsync: MISSING");
     expect(lines).toContain("  remote herdr: MISSING");
     for (const adapter of ADAPTERS) {
@@ -188,10 +209,17 @@ describe("doctor remote checks (fused)", () => {
     }
   });
 
+  test("a required managed coding image marker fails closed when absent", async () => {
+    const t = canned(checkRecords({ installed: true, image: null }));
+    const { value, lines } = await captureReadiness(t, { requireCodingImage: true });
+    expect(value).toBe(false);
+    expect(lines).toContain("  coding image: not a Beam release image");
+  });
+
   test("a failed root probe reports it and skips the privilege battery", async () => {
-    const t = canned(doctorRecords({ installed: true, rootCode: 1 }));
-    const { value, lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
-    expect(value).toBe(true);
+    const t = canned(checkRecords({ installed: true, rootCode: 1 }));
+    const { value, lines } = await captureReadiness(t);
+    expect(value).toBe(false);
     expect(lines).toContain("  root:         cannot create ~/beam");
     expect(lines.some((l) => l.startsWith("  privilege:"))).toBe(false);
     expect(t.execCount).toBe(1);
@@ -201,32 +229,28 @@ describe("doctor remote checks (fused)", () => {
     const posture = BENIGN_PRIVILEGE.map(
       ([k, c, v]): Rec => (k === "sudo" ? [k, 0, ""] : [k, c, v]),
     );
-    const t = canned(doctorRecords({ installed: true }), posture);
-    const { lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const t = canned(checkRecords({ installed: true }), posture);
+    const { lines } = await captureReadiness(t);
     expect(
       lines.some((l) => l.startsWith("  privilege:    WARNING — ") && l.includes("sudo")),
     ).toBe(true);
   });
 
   test("a failing probe script reports connectivity FAILED with its stderr", async () => {
-    const t = new CannedDoctorTransport(
-      { code: 255, stdout: "", stderr: "ssh: connect refused\n" },
-      { code: 0, stdout: "", stderr: "" },
-    );
-    const { value, lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const t = new CannedCheckTransport({ code: 255, stdout: "", stderr: "ssh: connect refused\n" },
+    { code: 0, stdout: "", stderr: "" },);
+    const { value, lines } = await captureReadiness(t);
     expect(value).toBe(false);
     expect(lines).toEqual(["  connectivity: FAILED — ssh: connect refused"]);
     expect(t.execCount).toBe(1);
   });
 
   test("truncated probe output fails closed before any per-tool line", async () => {
-    const whole = fused(DOCTOR_SENTINEL, doctorRecords({ installed: true }));
-    const truncated = whole.slice(0, whole.lastIndexOf(`${DOCTOR_SENTINEL} end`));
-    const t = new CannedDoctorTransport(
-      { code: 0, stdout: truncated, stderr: "" },
-      { code: 0, stdout: "", stderr: "" },
-    );
-    const { value, lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const whole = fused(CHECK_SENTINEL, checkRecords({ installed: true }));
+    const truncated = whole.slice(0, whole.lastIndexOf(`${CHECK_SENTINEL} end`));
+    const t = new CannedCheckTransport({ code: 0, stdout: truncated, stderr: "" },
+    { code: 0, stdout: "", stderr: "" },);
+    const { value, lines } = await captureReadiness(t);
     expect(value).toBe(false);
     expect(lines.length).toBe(1);
     expect(lines[0]).toMatch(/connectivity: FAILED — .*truncated.*refusing/);
@@ -237,23 +261,23 @@ describe("doctor remote checks (fused)", () => {
     const withProbe = ADAPTERS.find((a) => a.remoteAuthProbe !== undefined);
     if (withProbe === undefined) throw new Error("no adapter with a remote auth probe");
     const stray: Rec = [`auth.${withProbe.binary}`, 0, ""];
-    const records = [...doctorRecords({ installed: false }), stray];
+    const records = [...checkRecords({ installed: false }), stray];
     const t = canned(records);
-    const { value, lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const { value, lines } = await captureReadiness(t);
     expect(value).toBe(false);
     expect(lines[0]).toMatch(/connectivity: FAILED — .*unexpected record.*refusing/);
   });
 
   test("a missing auth record for an installed probing harness fails closed", async () => {
-    const records = doctorRecords({ installed: true }).filter(([k]) => !k.startsWith("auth."));
+    const records = checkRecords({ installed: true }).filter(([k]) => !k.startsWith("auth."));
     const t = canned(records);
-    const { value, lines } = await captureLog(() => doctorRemoteChecks(t, "prod", "~/beam"));
+    const { value, lines } = await captureReadiness(t);
     expect(value).toBe(false);
     expect(lines[0]).toMatch(/connectivity: FAILED — .*missing auth\..*refusing/);
   });
 
   test("the generated scripts run end to end over a real shell in two execs", async () => {
-    const home = mkdtempSync(join(tmpdir(), "beam-doctor-"));
+    const home = mkdtempSync(join(tmpdir(), "beam-check-"));
     const counting = new (class implements Transport {
       readonly label = "counting-local";
       execCount = 0;
@@ -279,7 +303,7 @@ describe("doctor remote checks (fused)", () => {
       }
     })();
     const { value, lines } = await captureLog(() =>
-      doctorRemoteChecks(counting, "local", "~/beam/ws"),
+      checkRemoteReadiness(counting, { name: "local", root: "~/beam/ws" }),
     );
     expect(value).toBe(true);
     expect(counting.execCount).toBe(2);

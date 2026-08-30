@@ -38,6 +38,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { cmdUp } from "../src/commands/up.ts";
 import { cmdDown } from "../src/commands/down.ts";
+import { cmdIntegrate } from "../src/commands/integrate.ts";
 import { resolveEnv } from "../src/env.ts";
 import { loadState, updateRecord, type BeamRecord } from "../src/state.ts";
 import { LocalTransport } from "../src/transport/local.ts";
@@ -4515,8 +4516,7 @@ describe.skipIf(!HAVE_DEPS)(
   );
 
   test(
-    "an honest --delete return persists the exact remote tree in the stage " +
-      "and leaves the live worktree byte-identical",
+    "an honest --delete return stages the exact remote tree before explicit integration",
     async () => {
       const f = await makeReturnFixture();
       writeFileSync(join(f.wt, ".beamignore"), "secrets/\n");
@@ -4565,19 +4565,9 @@ describe.skipIf(!HAVE_DEPS)(
       expect(existsSync(remoteCwd)).toBe(true);
       expect(recordStatus(record.id)).toBe("up");
 
-      // The printed recovery path works: an explicit rsync from the stage
-      // integrates the returned files, deletions included.
-      await runChecked([
-        "rsync",
-        "-a",
-        "--checksum",
-        "--delete",
-        "--exclude=/.beam",
-        "--exclude=.git",
-        "--exclude=secrets/",
-        `${stageWs}/`,
-        `${localCwd}/`,
-      ]);
+      // The first-class integration path applies the verified return while
+      // preserving excluded local content.
+      await cmdIntegrate([record.id, "--yes"], { json: false });
       expect(readFileSync(join(localCwd, "remote-new.txt"), "utf8")).toBe("made remotely\n");
       expect(existsSync(join(localCwd, "goes-away.txt"))).toBe(false);
       expect(readFileSync(join(localCwd, "secrets", "keys.txt"), "utf8")).toBe("shh\n");

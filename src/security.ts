@@ -4,8 +4,8 @@ import { shq } from "./util/shell.ts";
 /**
  * Fused remote probe protocol.
  *
- * beam's health probes (`beam doctor`, probePrivilege) used to issue one
- * transport exec per question, which made doctor O(n) round trips over a
+ * beam's health probes (`beam check`, probePrivilege) used to issue one
+ * transport exec per question, which made check O(n) round trips over a
  * real network. Each probe battery now ships as ONE shell script whose
  * answers come back as sentinel-prefixed records on stdout:
  *
@@ -28,7 +28,7 @@ export interface ProbeRecord {
 
 /** Probe values are single paths, user names, or counters — never trees. */
 export const PROBE_VALUE_MAX_BYTES = 4096;
-/** Ceiling on records in one fused result (doctor emits ~10). */
+/** Ceiling on records in one fused result (`beam check` emits about 10). */
 export const PROBE_MAX_RECORDS = 64;
 /** Ceiling on stdout lines scanned for records before rejecting. */
 export const PROBE_MAX_OUTPUT_LINES = 10_000;

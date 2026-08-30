@@ -42,6 +42,17 @@ export function ensurePrivateBeamDir(root: string, ...segments: string[]): strin
   return p;
 }
 
+/** Read-only counterpart used before consuming an existing private receipt. */
+export function assertPrivateBeamDir(root: string, ...segments: string[]): string {
+  let path = root;
+  assertPrivateComponent(path);
+  for (const segment of segments) {
+    path = join(path, segment);
+    assertPrivateComponent(path);
+  }
+  return path;
+}
+
 function securePrivateComponent(p: string): void {
   let st = lstatSync(p, { throwIfNoEntry: false });
   if (st === undefined) {
@@ -73,14 +84,25 @@ function securePrivateComponent(p: string): void {
     );
   }
   if ((st.mode & 0o077) !== 0) chmodSync(p, 0o700);
-  // Re-read through the same no-follow lens: the component must END as a
-  // real, closed directory no matter which branch ran above.
-  const final = lstatSync(p);
-  if (final.isSymbolicLink() || !final.isDirectory() || (final.mode & 0o077) !== 0) {
+  assertPrivateComponent(p);
+}
+
+function assertPrivateComponent(path: string): void {
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (st === undefined) {
+    throw new Error(`beam: private directory ${path} is missing`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (uid !== undefined && st.uid !== uid) {
     throw new Error(
-      `beam: could not secure private directory ${p} ` +
-        `(mode ${(final.mode & 0o7777).toString(8)}) — refusing to write private ` +
-        `return data into it`,
+      `beam: ${path} is owned by uid ${st.uid}, not this process (uid ${uid}) — ` +
+        `refusing to read foreign private data`,
+    );
+  }
+  if (st.isSymbolicLink() || !st.isDirectory() || (st.mode & 0o077) !== 0) {
+    throw new Error(
+      `beam: ${path} must be a real private directory owned by this process ` +
+        `(mode ${(st.mode & 0o7777).toString(8)})`,
     );
   }
 }

@@ -3,8 +3,13 @@
 beam's data plane is ssh. The question for self-hosted sandboxes is never
 "how does beam reach it" — it is **who is allowed to, as which user, with
 which privileges**. Hand-managed unix users answer that badly (the exact
-danger `beam doctor` probes for). The patterns below move authorization to a
+danger `beam check` probes for). The patterns below move authorization to a
 system built for it, ranked by how well they do that.
+
+> Want the managed, low-config path instead? `beam init` now selects the
+> built-in `box` provider. Install the Box CLI, run `box onboard`, and use
+> the quickstart in the README. The rest of this page is for operators who
+> want to own the infrastructure.
 
 ## 1. Dedicated VM + OS Login + IAP (recommended on GCP)
 
@@ -65,7 +70,7 @@ Host beam-sandbox
 First login, as yourself: install bun + your harness in your own home
 (`curl -fsSL https://bun.sh/install | bash`, then
 `bun install -g @oh-my-pi/pi-coding-agent` or the harness you use), then
-`beam login sandbox --tool omp` and `beam doctor sandbox` — expect
+`beam login sandbox --tool omp` and `beam check sandbox` — expect
 `privilege: ok`.
 
 ### Docker
@@ -122,7 +127,7 @@ interactive sessions ride the apiserver. Per this repo's security
 invariants it ships with teeth: a dedicated per-user namespace, a
 ServiceAccount scoped to claim lifecycle + pods/exec in that namespace
 only, an explicit `kubeconfig` REQUIRED in the target config (the ambient
-one is never used), and a fail-closed boundary check in both `beam doctor`
+one is never used), and a fail-closed boundary check in both `beam check`
 and `beam up` that REFUSES credentials holding known escape capabilities —
 cluster-wide claim create/list/delete or exec access, port-forward
 anywhere, Secret access of any kind
@@ -138,8 +143,10 @@ Whether harness *logins* survive claim deletion is template-dependent
 (ephemeral pod vs persistent home). See the README's configuration section
 for the target JSON.
 
-## Managed providers
+## Managed default
 
-When self-hosting is not worth the ops: the provider seam targets managed
-sandboxes (box.ascii.dev, Daytona, E2B, Modal, GKE Agent Sandbox) where the
-vendor enforces the boundary. See `docs/DESIGN.md`.
+The built-in `box` provider is the managed path: one disposable
+box.ascii.dev VM per handoff, browser onboarding, CLI-managed SSH keys, and
+no Beam runtime dependency. Beam bootstraps rsync and pinned herdr, then uses
+its ordinary SSH transport. Daytona, E2B, Modal, and other providers remain
+future provider-seam implementations.

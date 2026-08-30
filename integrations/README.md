@@ -2,7 +2,7 @@
 
 Run beam from *inside* your coding agent instead of quitting first. All
 integrations shell out to the `beam` CLI, so install it once (`bun link` in
-this repo) and configure a target (`beam init`, `beam doctor`).
+this repo) and configure a target (`beam setup box`, `beam check`).
 
 ## omp / pi — `/beam` slash command
 

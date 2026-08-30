@@ -91,7 +91,7 @@
       "id": 7,
       "name": "finished-work-round-trip",
       "prompt": "The remote agent from my earlier handoff should be done with the migration plan by now. Verify it finished, bring EVERYTHING back (the workspace results and the grown conversation), integrate the results into my local workspace, tell me the exact command to resume the session locally, and leave the target slot free.",
-      "expected_output": "beam down stages the return; the printed integration command is executed so REMOTE_RESULT.md lands locally; the resume hint is surfaced; kill --purge frees the slot.",
+      "expected_output": "beam down stages the return; beam integrate applies it so REMOTE_RESULT.md lands locally; the resume hint is surfaced; kill --purge frees the slot.",
       "files": [
         "hermetic fixture built by evals/setup.ts"
       ],

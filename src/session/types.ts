@@ -70,7 +70,7 @@ export interface InstallOptions {
  */
 export interface SessionAdapter {
   readonly tool: ToolName;
-  /** Binary expected on the target (checked by `beam doctor`). */
+  /** Binary expected on the target (checked by `beam check`). */
   readonly binary: string;
   /**
    * Interactive command that authenticates the harness on the target.

@@ -1,6 +1,7 @@
 import { lstatSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { cliAccent } from "../cli-output.ts";
 import { loadConfig, targetRoot, type Config } from "../config.ts";
 import { resolveEnv, type BeamEnv } from "../env.ts";
 import { adapterFor } from "../session/index.ts";
@@ -15,6 +16,7 @@ import {
 } from "../state.ts";
 import { createProvider } from "../provider/index.ts";
 import { HerdrRuntime } from "../runtime/herdr.ts";
+import { fileSha256 } from "../util/digest.ts";
 import type { Transport } from "../transport/index.ts";
 import {
   assertContainedWorkspace,
@@ -22,7 +24,6 @@ import {
   createReturnStage,
   gatherExcludes,
   remoteWorkspaceReturnFingerprint,
-  returnStageIntegrationCommand,
   stageWorkspaceReturn,
   workspaceOwnerContent,
   writeReturnStageManifest,
@@ -39,8 +40,8 @@ export const DOWN_HELP =
   `beam down — stop the remote agent, collect + verify + stage its work, and retain the remote
 
 usage: beam down [id] [options]
-  --delete          record remote deletions in the staged return (the
-                    printed integrate command then carries --delete)
+  --delete          license beam integrate to mirror remote deletions while
+                    protecting every excluded local path
   --verbose, -v     stream rsync progress
 
 \`beam down\` is non-destructive by contract. It NEVER mutates your live
@@ -54,10 +55,10 @@ by the exact collected snapshot, refs/beam/return/<id>/<fingerprint> (its
 \`manifest\` blob maps every ref to its state and pin — earlier fingerprints
 are history, never the latest); no branch is created, moved, or deleted, and HEAD and
 the index stay exactly where you left them.
-Inspect the printed stage, then run the exact printed integrate command. It
-carries the same effective excludes used to collect the stage (and, with
-\`--delete\`, protects every excluded local path). Applying over a live tree
-cannot be atomic, so quiesce your editors first.
+Run \`beam integrate <id>\` to inspect an itemized preview and confirm the
+apply. It reuses the exact excludes from collection and, with \`--delete\`,
+protects excluded local paths. Applying over a live tree cannot be atomic,
+so quiesce local writers first.
 Beam never deletes a persisted stage; remove old ~/.beam/returns stages
 yourself after integration.
 
@@ -287,6 +288,8 @@ interface DownReturnOutcome {
   /** Local-resume hint from the session return, when one was collected. */
   hint: string | undefined;
   /** Staged-return summary lines, re-printed in the completion summary. */
+  /** Latest verified workspace return, bound by the manifest digest. */
+  receipt: { manifestFile: string; manifestDigest: string };
   stagedSummary: string[];
 }
 
@@ -346,16 +349,16 @@ async function downCollectGitReturn(options: DownCollectOptions): Promise<DownRe
       when: "while the session was collected",
     });
     await gitReturn.assertRemoteGitUnchanged("while the session was collected");
-    const stagedSummary = downPublishReturnStage({
+    const published = downPublishReturnStage({
       ...options,
       stageRoot: stage.root,
       stageWorkspace: stage.workspace,
       fingerprint,
     });
     stageVerified = true;
-    for (const line of stagedSummary) console.log(line);
+    for (const line of published.stagedSummary) console.log(line);
     await downApplyGitState(gitReturn);
-    return { hint: session.hint, stagedSummary };
+    return { hint: session.hint, ...published };
   } finally {
     // The verified stage is PERSISTED — never deleted by beam. An
     // unverified partial is removed UNLESS a fresh session receipt was
@@ -412,15 +415,15 @@ async function downCollectPlainReturn(options: DownCollectOptions): Promise<Down
       ...options,
       when: "immediately before publishing the return",
     });
-    const stagedSummary = downPublishReturnStage({
+    const published = downPublishReturnStage({
       ...options,
       stageRoot: stage.root,
       stageWorkspace: stage.workspace,
       fingerprint,
     });
     stageVerified = true;
-    for (const line of stagedSummary) console.log(line);
-    return { hint: session.hint, stagedSummary };
+    for (const line of published.stagedSummary) console.log(line);
+    return { hint: session.hint, ...published };
   } finally {
     // The verified stage is PERSISTED — never deleted by beam. An
     // unverified partial is removed UNLESS a fresh session receipt was
@@ -527,26 +530,29 @@ function downPublishReturnStage(options: {
   stageRoot: string;
   stageWorkspace: string;
   fingerprint: WorkspaceReturnFingerprint;
-}): string[] {
+}): {
+  stagedSummary: string[];
+  receipt: { manifestFile: string; manifestDigest: string };
+} {
   const { record, excludes, mirrorDeletes, stageWorkspace } = options;
   const manifestFile = writeReturnStageManifest(options.stageRoot, {
     recordId: record.id,
+    localCwd: record.localCwd,
     remoteCwd: record.remoteCwd,
     fingerprint: options.fingerprint,
+    baseWorkspaceDigest: record.workspaceDigest ?? null,
     excludes,
     mirrorDeletes,
   });
-  const integrate = returnStageIntegrationCommand(
-    stageWorkspace,
-    record.localCwd,
-    excludes,
-    mirrorDeletes,
-  );
-  return [
-    `returned workspace staged at ${stageWorkspace}`,
-    `  verified receipt: ${manifestFile}`,
-    `  integrate it: ${integrate}`,
-  ];
+  const receipt = { manifestFile, manifestDigest: fileSha256(manifestFile) };
+  return {
+    receipt,
+    stagedSummary: [
+      `returned workspace staged at ${stageWorkspace}`,
+      `  verified receipt: ${manifestFile}`,
+      `  next: beam integrate ${record.id}`,
+    ],
+  };
 }
 
 /**
@@ -581,8 +587,8 @@ function downRecordAndReport(options: {
   outcome: DownReturnOutcome;
 }): void {
   const { env, record, t, outcome } = options;
-  updateRecord(env, record.id, { status: "up" });
-  console.log(`\nbeamed down ${record.id} (remote retained)`);
+  updateRecord(env, record.id, { status: "up", returnReceipt: outcome.receipt });
+  console.log(`\n${cliAccent("returned")} ${record.id} (remote retained)`);
   // The staged return comes FIRST in the completion summary: the live
   // worktree was not touched, so inspecting/integrating the stage is the
   // step before resuming local work.

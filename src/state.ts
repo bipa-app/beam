@@ -55,6 +55,11 @@ export interface BeamRecord {
   /** omp: local artifacts dir shipped alongside the session. */
   artifactsDir?: string;
   localCwd: string;
+  /**
+   * Physical identity of the local workspace directory at reservation time.
+   * `beam integrate` re-proves both values before it may touch the path.
+   */
+  localCwdId?: { dev: string; ino: string };
   remoteCwd: string;
   /** Name of the handoff's herdr session on the target (`beam-<id>`). */
   runtimeSession: string;
@@ -71,20 +76,21 @@ export interface BeamRecord {
   /**
    * Snapshot of the target spec this handoff was created against. Every
    * later operation (repeated up, down, status, attach, kill, login) binds
-   * through it, so editing the config (type/root/template) can
-   * never retarget a live handoff. Absent only on records written by older
-   * beams; remote operations refuse those (`recordSpec`) — the current
-   * config cannot prove where they live. Read-only listings label them.
+   * through it, so editing the config (type, root, or provider settings)
+   * can never retarget a live handoff. Absent only on records written by
+   * older Beam releases; remote operations refuse those (`recordSpec`) —
+   * the current config cannot prove where they live. Read-only listings
+   * label them.
    */
   targetSpec?: TargetSpec;
-  /** agent-sandbox: provider-owned resources backing this handoff. */
+  /** Provider-owned sandbox identity. Agent Sandbox records omit a kind for compatibility. */
   sandbox?: SandboxState;
   /**
    * Whether this record's provider owns the whole target while active
-   * (one sandbox claim per target). Persisted at creation so a later config
-   * edit (agent-sandbox → ssh/local) can never create a second record
-   * beside a live claim. Absent on older records; inferred from the
-   * snapshot by `holdsTargetExclusively`.
+   * (one shared sandbox claim per target). Persisted at creation so a later
+   * config edit from agent-sandbox to a non-exclusive provider can never
+   * create a second record beside a live claim. Absent on older records;
+   * inferred from the snapshot by `holdsTargetExclusively`.
    */
   exclusiveTarget?: boolean;
   /**
@@ -95,6 +101,20 @@ export interface BeamRecord {
    * victim after config/.beamignore drift.
    */
   syncedExcludes?: string[];
+  /**
+   * Strict filtered-tree digest of the last completed `beam up`. A return
+   * may be integrated only while the local filtered tree still matches it.
+   */
+  workspaceDigest?: string;
+  /**
+   * Pointer to the latest verified return manifest. The digest binds every
+   * apply option without duplicating mutable return state in state.json.
+   */
+  returnReceipt?: {
+    manifestFile: string;
+    manifestDigest: string;
+    integratedAt?: string;
+  };
   /**
    * Present when this ship materialized a Git workspace's standalone `.git`.
    * `beam down` keys its quarantined Git return off this common-repository
@@ -574,17 +594,16 @@ export interface ReserveOptions {
 }
 
 /**
- * Whether an active record owns its whole target (one sandbox claim per
- * target), judged by what the RECORD persisted — never by the current
- * config: editing a target from agent-sandbox to ssh/local must not
- * release the hold while the claim is still alive. Older records that
- * persisted neither the policy nor a snapshot fall back to their sandbox
- * coordinates (only provisioned sandboxes have them).
+ * Whether an active record owns its whole target (one shared Agent Sandbox
+ * claim per target), judged by what the RECORD persisted — never by the
+ * current config. Every other managed provider creates one resource per
+ * handoff and may run several workspaces under one named target.
  */
 function holdsTargetExclusively(r: BeamRecord): boolean {
   if (r.exclusiveTarget !== undefined) return r.exclusiveTarget;
   if (r.targetSpec) return r.targetSpec.type === "agent-sandbox";
-  return r.sandbox !== undefined;
+  if (r.sandbox === undefined) return false;
+  return !("kind" in r.sandbox);
 }
 
 /**
@@ -612,8 +631,8 @@ export function isRemoteCwdResolved(record: BeamRecord): boolean {
  * remote workspace path is derived from exactly that pair — two records
  * over the same pair would share a remote directory while holding
  * different operation locks. Exclusivity only decides whether OTHER
- * workspaces may hold the same target concurrently (ssh/local: yes,
- * provisioned sandboxes: no).
+ * workspaces may hold the same target concurrently. Static targets and
+ * per-handoff managed providers may; Agent Sandbox may not.
  */
 export function reserveTarget(
   env: BeamEnv,
@@ -636,7 +655,7 @@ export function reserveTarget(
       if (mine) return { record: mine, reused: true };
       // Exclusivity is a property of the sandbox a record OWNS, not of what
       // the config says today: an active agent-sandbox record keeps its
-      // target-wide hold even after the target is edited to ssh/local.
+      // target-wide hold even after the target becomes non-exclusive.
       if (opts.exclusive || actives.some(holdsTargetExclusively)) {
         const blocker = actives[0];
         if (blocker) {
@@ -759,8 +778,8 @@ export function findRecordForKill(env: BeamEnv, ref?: string): BeamRecord {
 }
 
 /**
- * Newest record still `up` on a target — target-scoped commands (login,
- * doctor) bind through it. In-flight states are deliberately excluded.
+ * Newest record still `up` on a target — target-scoped commands (`login`,
+ * `check`) bind through it. In-flight states are deliberately excluded.
  */
 export function latestUpForTarget(env: BeamEnv, target: string): BeamRecord | undefined {
   return [...loadState(env).records]

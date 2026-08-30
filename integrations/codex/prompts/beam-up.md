@@ -4,9 +4,9 @@ Run `beam up --tool codex -m "<the user's instructions, if any>"` with the
 shell tool from the current project directory.
 
 - If beam is missing or unconfigured, surface the error and point the user at
-  `beam init` / `beam doctor`.
+  `beam setup box` / `beam check`.
 - On success, report the beam id plus the watch commands (`beam status <id>`,
-  `beam attach <id>`) and note that `beam down <id>` syncs everything back and
-  purges the remote copy.
+  `beam attach <id>`), then the return sequence: `beam down <id>`,
+  `beam integrate <id>`, and finally `beam kill <id> --purge`.
 - Remind the user to exit this local session so the shipped transcript does
   not diverge.

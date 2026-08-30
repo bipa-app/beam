@@ -7,10 +7,12 @@ import {
   readdirSync,
   readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { cliAccent } from "../cli-output.ts";
 import {
   loadConfig,
   resolveTarget,
@@ -319,6 +321,7 @@ function reserveUpTarget(o: UpReserveOptions): { record: BeamRecord; reused: boo
       }
       const now = new Date().toISOString();
       const root = targetRoot(o.spec);
+      const cwd = statSync(o.localCwd, { bigint: true });
       return {
         id,
         target: o.targetName,
@@ -327,6 +330,7 @@ function reserveUpTarget(o: UpReserveOptions): { record: BeamRecord; reused: boo
         sessionFile: o.detected?.session.file,
         artifactsDir: o.detected?.session.artifactsDir,
         localCwd: o.localCwd,
+        localCwdId: { dev: cwd.dev.toString(), ino: cwd.ino.toString() },
         // Candidate until `pwd` resolves it.
         remoteCwd: `${root}/${remoteWorkspaceName(o.localCwd)}`,
         remoteCwdResolved: false,
@@ -897,16 +901,12 @@ async function upExecuteShip(o: UpExecuteShipOptions): Promise<void> {
     excludes,
   });
   const upload = await upUploadGeneration(ship, { staged, detected: o.detected, wtGit: o.wtGit });
-  // Journal the exclude set THIS successful upload ran with: `beam down`
-  // unions it into its inbound excludes, so a path excluded outbound
-  // (never shipped) can never be read as a remote deletion and erased
-  // locally after config/.beamignore drift. A pending resume ran no
-  // upload, so it keeps the crashed attempt's journaled union.
+  // Persist this upload's excludes so down cannot treat an outbound omission
+  // as a remote deletion. Pending resumes keep their journaled union.
   if (staged.pending === undefined) {
     updateRecord(o.env, o.record.id, { syncedExcludes: excludes });
   }
-  // Ship identity promoted by the final `up` write (a Git ship's completed
-  // generation); pending retries promote the JOURNALED one.
+  // Pending retries promote their journaled Git identity.
   const promoteShipInfo =
     staged.pending !== undefined ? staged.pending.git?.shipInfo : o.wtGit?.shipInfo;
   await upLandGitState(ship, {
@@ -924,7 +924,13 @@ async function upExecuteShip(o: UpExecuteShipOptions): Promise<void> {
     stagedSession: staged.stagedSession,
     noStart: o.values["no-start"] === true,
   });
-  upPromoteToUp(ship, { detected: o.detected, started, kickoff: o.kickoff, promoteShipInfo });
+  upPromoteToUp(ship, {
+    detected: o.detected,
+    started,
+    kickoff: o.kickoff,
+    promoteShipInfo,
+    workspaceDigest: upload.workspaceDigest,
+  });
 }
 
 /**
@@ -1019,7 +1025,8 @@ async function upJournalShipIntent(
   const excludes = gatherExcludes(o.localCwd, o.config);
   const git = await gitSummary(o.localCwd);
   console.log(
-    `shipping ${o.localCwd}${git ? ` [${git}]` : ""}\n      -> ${ship.t.label}:${ship.remoteCwd}` +
+    `shipping ${o.localCwd}${git ? ` [${git}]` : ""}\n      ` +
+      `${cliAccent("━━━━━━━━")} ${ship.t.label}:${ship.remoteCwd}` +
       (excludes.length > 0 ? `\n      excludes: ${excludes.join(", ")}` : ""),
   );
   assertPinnedWorkspaceLayout({
@@ -1347,7 +1354,7 @@ async function upUploadGeneration(
     detected: DetectedSession | undefined;
     wtGit: MaterializedWorktreeGit | undefined;
   },
-): Promise<{ pointerOwedGeneration: string | undefined }> {
+): Promise<{ pointerOwedGeneration: string | undefined; workspaceDigest: string }> {
   try {
     if (o.staged.pending !== undefined) {
       return await upResumePendingUpload(ship, {
@@ -1356,12 +1363,12 @@ async function upUploadGeneration(
         shipStageDir: o.staged.shipStage.dir,
       });
     }
-    await upUploadFreshGeneration(ship, {
+    const workspaceDigest = await upUploadFreshGeneration(ship, {
       wtGit: o.wtGit,
       stagedSession: o.staged.stagedSession,
       shipStageDir: o.staged.shipStage.dir,
     });
-    return { pointerOwedGeneration: undefined };
+    return { pointerOwedGeneration: undefined, workspaceDigest };
   } finally {
     o.staged.shipStage.dispose();
   }
@@ -1380,7 +1387,7 @@ async function upResumePendingUpload(
     detected: DetectedSession | undefined;
     shipStageDir: string;
   },
-): Promise<{ pointerOwedGeneration: string | undefined }> {
+): Promise<{ pointerOwedGeneration: string | undefined; workspaceDigest: string }> {
   const pending = o.pending;
   upAssertPendingSessionIdentity(ship, { pending, detected: o.detected });
   if (pending.session !== undefined) assertJournaledSessionStage(ship.id, pending.session);
@@ -1397,7 +1404,8 @@ async function upResumePendingUpload(
     shipStageDir: o.shipStageDir,
   });
   if (pending.git !== undefined) {
-    return await upProvePendingGit(ship, { git: pending.git, wsProven });
+    const result = await upProvePendingGit(ship, { git: pending.git, wsProven });
+    return { ...result, workspaceDigest: pending.workspaceDigest };
   }
   if (!wsProven) {
     throw new Error(
@@ -1410,7 +1418,7 @@ async function upResumePendingUpload(
     `resuming interrupted handoff ${ship.id} — its workspace already landed on ` +
       `${ship.targetName}; re-shipping nothing`,
   );
-  return { pointerOwedGeneration: undefined };
+  return { pointerOwedGeneration: undefined, workspaceDigest: pending.workspaceDigest };
 }
 
 /**
@@ -1592,7 +1600,7 @@ async function upUploadFreshGeneration(
     stagedSession: StagedSessionJournal | undefined;
     shipStageDir: string;
   },
-): Promise<void> {
+): Promise<string> {
   // The Git payload and the staged workspace must describe ONE coherent
   // checkout instant: Git state may not have moved across the staging
   // window.
@@ -1639,6 +1647,7 @@ async function upUploadFreshGeneration(
     },
   });
   await removeWorkspaceUploadStage(ship.t, ship.remoteCwd, stagedWs.digest, ship.owner);
+  return stagedWs.digest;
 }
 
 /**
@@ -1851,11 +1860,13 @@ function upPromoteToUp(
     started: boolean;
     kickoff: string | undefined;
     promoteShipInfo: WtGitShipInfo | undefined;
+    workspaceDigest: string;
   },
 ): void {
   updateRecord(ship.env, ship.id, {
     status: "up",
     shipPending: undefined,
+    workspaceDigest: o.workspaceDigest,
     ...(o.promoteShipInfo !== undefined
       ? { wtGit: o.promoteShipInfo, workspaceKind: "git" as const }
       : {}),
@@ -1868,7 +1879,7 @@ function upPromoteToUp(
   // deleted stage.
   rmSync(sessionStageRoot(ship.env, ship.id), { recursive: true, force: true });
 
-  console.log(`\nbeamed up as ${ship.id} (target: ${ship.targetName})`);
+  console.log(`\n${cliAccent("landed")} as ${ship.id} (target: ${ship.targetName})`);
   if (o.started) {
     console.log(`  watch:   beam attach ${ship.id}   (detach: ctrl+b q)`);
     console.log(`  glimpse: beam status ${ship.id}`);

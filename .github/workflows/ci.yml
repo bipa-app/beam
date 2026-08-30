@@ -20,13 +20,34 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y rsync
           curl -fsSL -o /tmp/herdr https://github.com/herdrdev/herdr/releases/download/v0.8.0/herdr-linux-x86_64
+          echo "b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28  /tmp/herdr" \
+            | sha256sum --check
           sudo install -m 0755 /tmp/herdr /usr/local/bin/herdr
       - name: Install e2e deps (macOS)
         if: runner.os == 'macOS'
         run: |
           curl -fsSL -o /tmp/herdr https://github.com/herdrdev/herdr/releases/download/v0.8.0/herdr-macos-aarch64
+          echo "d53a9f93fccfdfcc55632927bf51002f5add0aa7990bcdf508ffbd84ac658178  /tmp/herdr" \
+            | shasum --algorithm 256 --check
           sudo install -m 0755 /tmp/herdr /usr/local/bin/herdr
       - run: bun install --frozen-lockfile
       - run: bun run style
       - run: bunx tsc --noEmit
       - run: bun test
+      - name: Compile standalone binary
+        run: bun build --compile --minify --outfile=beam src/cli.ts
+      - name: Smoke standalone binary in a clean environment
+        shell: bash
+        run: |
+          smoke_home="$RUNNER_TEMP/beam-standalone-home"
+          mkdir -p "$smoke_home"
+          env -i \
+            HOME="$smoke_home" \
+            BEAM_HOME="$smoke_home" \
+            PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+            ./beam init
+          env -i \
+            HOME="$smoke_home" \
+            BEAM_HOME="$smoke_home" \
+            PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+            ./beam targets

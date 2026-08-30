@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { LocalTransport } from "./transport/local.ts";
 import type { Config } from "./config.ts";
-import { run, shjoin, shq, shqRemotePath } from "./util/shell.ts";
+import { run, shq, shqRemotePath } from "./util/shell.ts";
 import type { Transport } from "./transport/types.ts";
 
 /**
@@ -385,29 +385,6 @@ export async function assertShipSizeBounded(
   );
 }
 
-/**
- * Exact, copy-pasteable command for explicitly integrating a verified
- * return stage. Its filter argv is the same effective exclude union used
- * to collect and fingerprint the stage. This is essential with `--delete`:
- * an omitted remote path that was excluded from the return must remain
- * protected at the local destination.
- */
-export function returnStageIntegrationCommand(
-  stagedWorkspace: string,
-  localCwd: string,
-  excludes: string[],
-  mirrorDeletes: boolean,
-): string {
-  const argv = ["rsync", "-a", "--checksum"];
-  if (mirrorDeletes) argv.push("--delete");
-  argv.push(
-    ...excludes.map((exclude) => `--exclude=${exclude}`),
-    "--",
-    `${stagedWorkspace.replace(/\/+$/, "")}/`,
-    `${localCwd.replace(/\/+$/, "")}/`,
-  );
-  return shjoin(argv);
-}
 
 /**
  * Keep the shipped-session scratch dir out of git status without touching
@@ -1822,8 +1799,10 @@ export function writeReturnStageManifest(
   root: string,
   manifest: {
     recordId: string;
+    localCwd: string;
     remoteCwd: string;
     fingerprint: WorkspaceReturnFingerprint;
+    baseWorkspaceDigest: string | null;
     excludes: string[];
     mirrorDeletes: boolean;
   },
@@ -1833,9 +1812,14 @@ export function writeReturnStageManifest(
   // sits beside private return data. The 0700 txn root already blocks
   // traversal; the explicit mode keeps the receipt closed even if a stage
   // is later moved out of it.
+  const content = JSON.stringify(
+    { version: 1, ...manifest, createdAt: new Date().toISOString() },
+    null,
+    2,
+  );
   writeFileSync(
     file,
-    `${JSON.stringify({ ...manifest, createdAt: new Date().toISOString() }, null, 2)}\n`,
+    `${content}\n`,
     { mode: 0o600 },
   );
   return file;
