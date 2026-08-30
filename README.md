@@ -31,21 +31,16 @@ managed VM; no SSH server setup is required.
 
 ### 1. Install Beam and Box
 
-Release binaries are self-contained. Bun is not required. Apple silicon:
+The installer detects macOS/Linux and x64/arm64, verifies the release
+checksum, and installs the self-contained binary to `~/.local/bin/beam`.
+Bun is not required.
 
 ```bash
-curl --fail --location --output beam-darwin-arm64 \
-  https://github.com/bipa-app/beam/releases/latest/download/beam-darwin-arm64
-curl --fail --location --remote-name \
-  https://github.com/bipa-app/beam/releases/latest/download/SHA256SUMS
-grep '  beam-darwin-arm64$' SHA256SUMS | shasum -a 256 --check
-mkdir -p ~/.local/bin
-install -m 0755 beam-darwin-arm64 ~/.local/bin/beam
-
+curl -fsSL https://beamai.sh/install | sh
 curl -fsSL https://box.ascii.dev/install | sh
 ```
 
-Linux x64/arm64, macOS x64, and `SHA256SUMS` are on the
+For a manual install, all four platform binaries and `SHA256SUMS` are on the
 [latest release](https://github.com/bipa-app/beam/releases/latest).
 
 ### 2. Set up Box

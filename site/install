@@ -1,0 +1,114 @@
+#!/usr/bin/env sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+
+REPOSITORY="bipa-app/beam"
+DOWNLOAD_BASE="https://github.com/$REPOSITORY/releases/latest/download"
+BINARY_BYTES_MAX=134217728
+SUMS_BYTES_MAX=1048576
+CONNECT_TIMEOUT_SECONDS=15
+DOWNLOAD_TIMEOUT_SECONDS=300
+
+fail() {
+  printf 'beam install: %s\n' "$1" >&2
+  exit 1
+}
+
+if [ -z "${HOME:-}" ]; then
+  fail "HOME is not set; set HOME to choose the user install directory."
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  fail "curl is required; install curl and run this installer again."
+fi
+
+UNAME_OS="$(uname -s)"
+case "$UNAME_OS" in
+  Darwin) OS="darwin" ;;
+  Linux) OS="linux" ;;
+  *)
+    fail "unsupported operating system: $UNAME_OS. Use a release binary instead."
+    ;;
+esac
+
+UNAME_ARCH="$(uname -m)"
+case "$UNAME_ARCH" in
+  arm64|aarch64) ARCH="arm64" ;;
+  x86_64|amd64) ARCH="x64" ;;
+  *)
+    fail "unsupported architecture: $UNAME_ARCH. Use a release binary instead."
+    ;;
+esac
+
+ASSET="beam-$OS-$ARCH"
+INSTALL_DIR="${BEAM_INSTALL_DIR:-$HOME/.local/bin}"
+TARGET="$INSTALL_DIR/beam"
+mkdir -p "$INSTALL_DIR"
+BINARY_TMP="$(mktemp "$INSTALL_DIR/.beam.XXXXXX")"
+SUMS_TMP="$(mktemp "${TMPDIR:-/tmp}/beam-sums.XXXXXX")"
+
+cleanup() {
+  if [ -n "${BINARY_TMP:-}" ]; then rm -f "$BINARY_TMP"; fi
+  if [ -n "${SUMS_TMP:-}" ]; then rm -f "$SUMS_TMP"; fi
+}
+trap cleanup 0 1 2 15
+
+curl --fail --silent --show-error --location --proto '=https' \
+  --connect-timeout "$CONNECT_TIMEOUT_SECONDS" \
+  --max-time "$DOWNLOAD_TIMEOUT_SECONDS" \
+  --max-filesize "$BINARY_BYTES_MAX" \
+  --output "$BINARY_TMP" "$DOWNLOAD_BASE/$ASSET"
+curl --fail --silent --show-error --location --proto '=https' \
+  --connect-timeout "$CONNECT_TIMEOUT_SECONDS" \
+  --max-time "$DOWNLOAD_TIMEOUT_SECONDS" \
+  --max-filesize "$SUMS_BYTES_MAX" \
+  --output "$SUMS_TMP" "$DOWNLOAD_BASE/SHA256SUMS"
+
+EXPECTED_HASH="$(awk -v asset="$ASSET" '$2 == asset { print $1 }' "$SUMS_TMP")"
+if [ -z "$EXPECTED_HASH" ]; then
+  fail "SHA256SUMS does not contain $ASSET; the release is incomplete."
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_HASH="$(sha256sum "$BINARY_TMP" | awk '{ print $1 }')"
+else
+  if command -v shasum >/dev/null 2>&1; then
+    ACTUAL_HASH="$(shasum -a 256 "$BINARY_TMP" | awk '{ print $1 }')"
+  else
+    fail "sha256sum or shasum is required to verify the release binary."
+  fi
+fi
+
+if [ "$ACTUAL_HASH" != "$EXPECTED_HASH" ]; then
+  fail "checksum mismatch for $ASSET; the existing Beam binary was not changed."
+fi
+
+chmod 0755 "$BINARY_TMP"
+if ! "$BINARY_TMP" help >/dev/null 2>&1; then
+  fail "$ASSET could not run here; the existing Beam binary was not changed."
+fi
+mv -f "$BINARY_TMP" "$TARGET"
+BINARY_TMP=""
+
+echo "Installed Beam to $TARGET"
+case ":${PATH:-}:" in
+  *":$INSTALL_DIR:"*)
+    echo "Run: beam help"
+    ;;
+  *)
+    SHELL_NAME="$(basename "${SHELL:-sh}")"
+    PROFILE="$HOME/.profile"
+    if [ "$SHELL_NAME" = "zsh" ]; then PROFILE="$HOME/.zshrc"; fi
+    if [ "$SHELL_NAME" = "bash" ]; then PROFILE="$HOME/.bashrc"; fi
+    echo ""
+    echo "$INSTALL_DIR is not on PATH yet."
+    echo "For this terminal, run:"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+    echo "  beam help"
+    echo ""
+    echo "To make it permanent, run:"
+    printf '%s\n' "  printf '\nexport PATH=\"$INSTALL_DIR:\$PATH\"\n' >> \"$PROFILE\""
+    echo "  . \"$PROFILE\""
+    ;;
+esac

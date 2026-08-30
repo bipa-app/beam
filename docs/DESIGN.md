@@ -248,6 +248,11 @@ E2B templates, Modal sandboxes, and Daytona snapshots therefore use the image
 published from the same release tag. Source builds must receive an explicit
 immutable digest; setup refuses mutable tags and conflicting resources.
 
+The public `https://beamai.sh/install` bootstrap detects the four release
+platforms, downloads one binary plus `SHA256SUMS`, enforces byte and time
+ceilings, verifies SHA-256, and smoke-runs the binary before replacing
+`~/.local/bin/beam`. It never edits shell profiles or installs provider state.
+
 13. **Every Git workspace ships a materialized standalone `.git` — and its
    Git state round-trips losslessly.** A linked worktree's `.git` is a host
    path pointer; a standard checkout's `.git` contains config and hooks the
@@ -511,6 +516,12 @@ bootstrap only when its replaceable compute ID changes.
 `beam setup` adds only provider-CLI control-plane calls: one bounded
 inspection in plan mode, then one re-inspection, one create, and one
 verification in apply mode. It never provisions a handoff.
+
+The public installer makes exactly two bounded HTTPS data transfers: one
+binary of at most 128 MiB and one checksum manifest of at most 1 MiB. Each
+connect may take at most 15 seconds and each transfer at most 300 seconds. It
+writes one temporary binary beside the destination and replaces `beam` only
+after checksum and execution proofs. These costs are O(1) in release count.
 
 **Network — data plane.** Two transfers on `up` (workspace stage, `.git`
 payload) plus explicit per-path session transfers; three on `down` (`.git`
