@@ -785,6 +785,15 @@ herdr agent state API named in *Later*) may poll until the user stops it —
 each tick is one bounded control-plane probe with a stated per-tick timeout
 and an explicit interval.
 
+The seam traits stay dyn-compatible because providers select their transport
+at runtime. Rust 1.98 still excludes `async fn` and return-position opaque
+futures from dyn-compatible traits, so each async seam method returns one
+explicit `Pin<Box<dyn Future<…>>>`. That is one bounded allocation per async
+seam invocation. Implementations share concrete internal futures so a checked
+exec does not box its underlying control-plane call twice. This preserves
+extension by implementation instead of widening callers and avoids an
+`async-trait` dependency.
+
 **Digest policy: drain before cutover.** No live handoff crosses binaries, so
 no receipt or fingerprint is ever compared across implementations. That
 licenses two deliberate fixes in the port: transcripts are hashed as raw
