@@ -463,6 +463,13 @@ immutable digest; setup refuses mutable tags and conflicting resources.
     The checks are plain POSIX shell, so ssh, kubectl, and the local
     transport stay symmetric, `~/` roots included.
 
+15. **The CLI is moving to Rust.** The port pins at `4fb7680`, grows side by
+    side in `rust/`, and replaces the Bun/TS implementation at cutover.
+    Behavior is the contract: the four seams, the generated remote shell,
+    subprocess argv, persisted JSON shapes, and the `schemaVersion: 1` CLI
+    envelope stay compatible, gated by parity goldens generated from the
+    TypeScript implementation. See *Rust port (transition record)* below.
+
 ## Performance sketch (a budget, not a note)
 
 Back-of-the-envelope, in slowest-resource-first order. The numbers are the
@@ -691,6 +698,70 @@ codex scans newest-first and parses `session_meta`.
   templates, images, snapshots, and account environments still define which
   secrets the agent receives. That is safer than hardening a shared raw
   server, not a reason to inject every account secret.
+
+## Rust port (transition record)
+
+Decided 2026-08-30, pinned at `4fb7680`. The beam CLI moves from Bun/TypeScript
+to Rust; the TypeScript binary keeps shipping until the cutover gate passes.
+
+**Why.** A static binary removes the one implicit runtime dependency operators
+install today (Bun). Rust adds real integer widths (ending the
+`Number.isSafeInteger` validation dance), exhaustive enums over the record
+state machine, and compile-time exhaustiveness at every seam. The TypeScript
+code is already async/await on one thread, so an async port on a
+current-thread runtime is a near-1:1 transliteration — the lowest-risk
+mapping. Performance is not the argument: cost lives in network round trips
+and moved bytes (see the performance sketch), which a language cannot change.
+
+**What does not change.** The four seams and their contracts. Remote logic
+stays generated POSIX sh — the target runs bash, not beam. kubectl, ssh,
+rsync, tar, git, and herdr stay subprocesses with pinned argv; kubectl's
+stderr text is contract (NotFound/Conflict classification), so no native
+Kubernetes client. Every security invariant in AGENTS.md. The
+`schemaVersion: 1` JSON envelope, the flag surface, exit codes, and release
+asset names.
+
+**Dependency policy.** "Zero runtime dependencies" becomes "zero system
+runtime dependencies, and a closed crate allowlist": tokio (current-thread;
+features rt, process, io-util, time, signal, macros — never full), serde,
+serde_json (preserve_order), sha2, hex, getrandom, rustix, ureq (rustls), and
+tempfile. Growing the list is an architecture decision recorded here.
+`cargo deny` gates advisories, licenses, sources, and bans in CI;
+`Cargo.lock` is committed; `rust/deny.toml`'s license list grows only in the
+PR that adds the dependency needing it.
+
+**Concurrency.** One current-thread runtime: no work stealing, no `Send`
+infection, and the single-threaded reasoning the TypeScript code was written
+under is preserved. Every await carries a timeout — the `MAX_*` ceiling
+analogue at suspension points. Hashing stays inline: blocking the loop during
+a fingerprint phase is behaviorally identical to today's `readSync` loops.
+One licensed exception to Tiger Safety 11 ("run at your own pace"): a
+user-entered watch phase (`beam status -w`, `beam ls -w`, building on the
+herdr agent state API named in *Later*) may poll until the user stops it —
+each tick is one bounded control-plane probe with a stated per-tick timeout
+and an explicit interval.
+
+**Digest policy: drain before cutover.** No live handoff crosses binaries, so
+no receipt or fingerprint is ever compared across implementations. That
+licenses two deliberate fixes in the port: transcripts are hashed as raw
+bytes (the TypeScript implementation hashes the lossy-UTF-8 decode), and
+fingerprint composites move from JS `JSON.stringify` key order to one
+canonical serialization.
+
+**Mechanics.** The port grows in `rust/` (the crate moves to the repo root at
+cutover, when `src/*.ts`, `scripts/check-style.ts`, `tsconfig.json`, and
+`bun.lock` are deleted and AGENTS.md is re-derived for Rust). Parity goldens
+generated from the TypeScript implementation gate every seam: generated shell
+scripts byte-exact, quoting corpora, fingerprint composites, state-machine
+transitions, and JSON envelopes. Port order: util → cli-output/config/state →
+transports (local first — it is the hermetic test double) → session adapters
+→ herdr runtime → workspace + workspace-git → providers → commands.
+TypeScript changes landing after the pin are replayed from a commit ledger
+before cutover. The cutover gate: the Rust e2e herdr round trip green on both
+OSes, the style gate ported (rustfmt + clippy + a syn-based checker for the
+bespoke rules), release assets built by cargo for the same four targets, all
+live handoffs drained, then the PATH flip and TypeScript deletion in one
+change.
 
 ## Later
 
