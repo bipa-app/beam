@@ -1,0 +1,34 @@
+{
+  "documents": [
+    {
+      "label": "success",
+      "exitCode": 0,
+      "document": "{\"schemaVersion\":1,\"ok\":true,\"command\":\"probe\",\"data\":{\"answer\":42,\"nested\":{\"list\":[1,2]}},\"messages\":[{\"level\":\"info\",\"text\":\"setup complete\"},{\"level\":\"warning\",\"text\":\"careful now\"}]}"
+    },
+    {
+      "label": "successNullData",
+      "exitCode": 0,
+      "document": "{\"schemaVersion\":1,\"ok\":true,\"command\":\"probe\",\"data\":null,\"messages\":[]}"
+    },
+    {
+      "label": "cliError",
+      "exitCode": 1,
+      "document": "{\"schemaVersion\":1,\"ok\":false,\"command\":\"probe\",\"error\":{\"code\":\"bad_input\",\"message\":\"the thing was wrong\",\"details\":{\"field\":\"root\"}},\"messages\":[{\"level\":\"error\",\"text\":\"about to fail\"}]}"
+    },
+    {
+      "label": "plainError",
+      "exitCode": 1,
+      "document": "{\"schemaVersion\":1,\"ok\":false,\"command\":\"probe\",\"error\":{\"code\":\"command_failed\",\"message\":\"boom\"},\"messages\":[]}"
+    },
+    {
+      "label": "nonErrorThrow",
+      "exitCode": 1,
+      "document": "{\"schemaVersion\":1,\"ok\":false,\"command\":\"probe\",\"error\":{\"code\":\"command_failed\",\"message\":\"string failure\"},\"messages\":[]}"
+    },
+    {
+      "label": "nonzeroExitCode",
+      "exitCode": 3,
+      "document": "{\"schemaVersion\":1,\"ok\":false,\"command\":\"probe\",\"error\":{\"code\":\"command_failed\",\"message\":\"last word\"},\"messages\":[{\"level\":\"info\",\"text\":\"last word\"}]}"
+    }
+  ]
+}

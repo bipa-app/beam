@@ -29,11 +29,31 @@ struct WildcardVisitor {
 }
 
 impl<'ast> Visit<'ast> for WildcardVisitor {
-    fn visit_pat(&mut self, pat: &'ast syn::Pat) {
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        self.check(&arm.pat);
+        syn::visit::visit_arm(self, arm);
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        self.check(&local.pat);
+        syn::visit::visit_local(self, local);
+    }
+
+    fn visit_expr_let(&mut self, expr: &'ast syn::ExprLet) {
+        self.check(&expr.pat);
+        syn::visit::visit_expr_let(self, expr);
+    }
+}
+impl WildcardVisitor {
+    /// Flag a wildcard or `..` rest pattern in a match arm, `let`,
+    /// `let else`, or `if let` — the positions where a new enum variant is
+    /// silently absorbed. Closure and function parameters are exempt: a
+    /// destructuring `_` there discards a known field, it never absorbs a
+    /// variant the compiler would otherwise list.
+    fn check(&mut self, pat: &syn::Pat) {
         if matches!(pat, syn::Pat::Wild(_) | syn::Pat::Rest(_)) {
             self.hits.push(pat.span().start().line);
         }
-        syn::visit::visit_pat(self, pat);
     }
 }
 
