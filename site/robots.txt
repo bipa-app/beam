@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://bipa-app.github.io/beam/sitemap.xml
+Sitemap: https://beamai.sh/sitemap.xml
