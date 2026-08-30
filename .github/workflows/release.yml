@@ -104,6 +104,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: beam-*
           path: dist
           merge-multiple: true
       - name: Write checksums
