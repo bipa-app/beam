@@ -9,10 +9,12 @@ repository = "https://github.com/bipa-app/beam"
 [dependencies]
 # Allowlist (docs/DESIGN.md: Rust port (transition record)) — exact versions
 # are pinned by the committed Cargo.lock.
+getrandom = "0.4"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 serde_json = { version = "1", features = ["preserve_order"] }
+rustix = { version = "1", features = ["fs", "process"] }
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "time"] }
 
 [dev-dependencies]
