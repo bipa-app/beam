@@ -1,0 +1,19 @@
+# Supply-chain gate for the Rust port. The crate allowlist itself is normative
+# in docs/DESIGN.md ("Rust port (transition record)"); this file enforces
+# advisories, licenses, sources, and bans for everything the allowlist pulls in
+# transitively. Extending the license list happens in the same PR that adds the
+# dependency needing it.
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = ["MIT"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -51,3 +51,22 @@ jobs:
             BEAM_HOME="$smoke_home" \
             PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
             ./beam targets
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- --deny warnings
+      - run: cargo test --locked
+      - name: Supply-chain gate
+        if: runner.os == 'Linux'
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: rust/Cargo.toml
