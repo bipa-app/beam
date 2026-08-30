@@ -13,6 +13,7 @@ use std::pin::Pin;
 use crate::util::shell::{RunError, RunResult};
 
 pub mod local;
+pub mod ssh;
 
 /// Target process exit code and captured output.
 pub type ExecResult = RunResult;
