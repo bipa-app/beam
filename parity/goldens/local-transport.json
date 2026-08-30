@@ -1,0 +1,80 @@
+{
+  "createWalkBlocks": [
+    {
+      "input": "/",
+      "output": [
+        "cd -P -- '/' 2>/dev/null || { echo 'beam: cannot enter /' >&2; exit 66; }\n__beam_prefix=''"
+      ]
+    },
+    {
+      "input": "/tmp/beam/work",
+      "output": [
+        "cd -P -- '/' 2>/dev/null || { echo 'beam: cannot enter /' >&2; exit 66; }\n__beam_prefix=''",
+        "if [ -L 'tmp' ]; then echo 'beam: refusing to create through symlinked path component: tmp' >&2; exit 61; fi\nif [ ! -e 'tmp' ]; then mkdir -- 'tmp' || { echo 'beam: cannot create tmp' >&2; exit 66; }; fi\nif [ -L 'tmp' ] || [ ! -d 'tmp' ]; then echo 'beam: refusing to create through non-directory path component: tmp' >&2; exit 61; fi\ncd -P -- 'tmp' 2>/dev/null || { echo 'beam: cannot enter tmp' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'tmp'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_prefix\" ]; then echo 'beam: tmp no longer resolves to its pinned physical directory — refusing' >&2; exit 66; fi",
+        "if [ -L 'beam' ]; then echo 'beam: refusing to create through symlinked path component: beam' >&2; exit 61; fi\nif [ ! -e 'beam' ]; then mkdir -- 'beam' || { echo 'beam: cannot create beam' >&2; exit 66; }; fi\nif [ -L 'beam' ] || [ ! -d 'beam' ]; then echo 'beam: refusing to create through non-directory path component: beam' >&2; exit 61; fi\ncd -P -- 'beam' 2>/dev/null || { echo 'beam: cannot enter beam' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'beam'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_prefix\" ]; then echo 'beam: beam no longer resolves to its pinned physical directory — refusing' >&2; exit 66; fi",
+        "if [ -L 'work' ]; then echo 'beam: refusing to create through symlinked path component: work' >&2; exit 61; fi\nif [ ! -e 'work' ]; then mkdir -- 'work' || { echo 'beam: cannot create work' >&2; exit 66; }; fi\nif [ -L 'work' ] || [ ! -d 'work' ]; then echo 'beam: refusing to create through non-directory path component: work' >&2; exit 61; fi\ncd -P -- 'work' 2>/dev/null || { echo 'beam: cannot enter work' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'work'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_prefix\" ]; then echo 'beam: work no longer resolves to its pinned physical directory — refusing' >&2; exit 66; fi"
+      ]
+    },
+    {
+      "input": "/tmp/ha rd 'quo$te` );&|/leaf",
+      "output": [
+        "cd -P -- '/' 2>/dev/null || { echo 'beam: cannot enter /' >&2; exit 66; }\n__beam_prefix=''",
+        "if [ -L 'tmp' ]; then echo 'beam: refusing to create through symlinked path component: tmp' >&2; exit 61; fi\nif [ ! -e 'tmp' ]; then mkdir -- 'tmp' || { echo 'beam: cannot create tmp' >&2; exit 66; }; fi\nif [ -L 'tmp' ] || [ ! -d 'tmp' ]; then echo 'beam: refusing to create through non-directory path component: tmp' >&2; exit 61; fi\ncd -P -- 'tmp' 2>/dev/null || { echo 'beam: cannot enter tmp' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'tmp'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_prefix\" ]; then echo 'beam: tmp no longer resolves to its pinned physical directory — refusing' >&2; exit 66; fi",
+        "if [ -L 'ha rd '\\''quo$te` );&|' ]; then echo 'beam: refusing to create through symlinked path component: ha rd '\\''quo$te` );&|' >&2; exit 61; fi\nif [ ! -e 'ha rd '\\''quo$te` );&|' ]; then mkdir -- 'ha rd '\\''quo$te` );&|' || { echo 'beam: cannot create ha rd '\\''quo$te` );&|' >&2; exit 66; }; fi\nif [ -L 'ha rd '\\''quo$te` );&|' ] || [ ! -d 'ha rd '\\''quo$te` );&|' ]; then echo 'beam: refusing to create through non-directory path component: ha rd '\\''quo$te` );&|' >&2; exit 61; fi\ncd -P -- 'ha rd '\\''quo$te` );&|' 2>/dev/null || { echo 'beam: cannot enter ha rd '\\''quo$te` );&|' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'ha rd '\\''quo$te` );&|'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_prefix\" ]; then echo 'beam: ha rd '\\''quo$te` );&| no longer resolves to its pinned physical directory — refusing' >&2; exit 66; fi",
+        "if [ -L 'leaf' ]; then echo 'beam: refusing to create through symlinked path component: leaf' >&2; exit 61; fi\nif [ ! -e 'leaf' ]; then mkdir -- 'leaf' || { echo 'beam: cannot create leaf' >&2; exit 66; }; fi\nif [ -L 'leaf' ] || [ ! -d 'leaf' ]; then echo 'beam: refusing to create through non-directory path component: leaf' >&2; exit 61; fi\ncd -P -- 'leaf' 2>/dev/null || { echo 'beam: cannot enter leaf' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'leaf'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_prefix\" ]; then echo 'beam: leaf no longer resolves to its pinned physical directory — refusing' >&2; exit 66; fi"
+      ]
+    }
+  ],
+  "ownedDestinationBlocks": [
+    {
+      "label": "root",
+      "owner": "beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef",
+      "relative": [],
+      "create": false,
+      "output": [
+        "(\n  __beam_og_root=$(/bin/pwd -P) || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\n  if [ -L ./.beam ] || [ ! -d ./.beam ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\n  cd -P -- ./.beam 2>/dev/null || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\n  if [ \"$(/bin/pwd -P)\" != \"$__beam_og_root/.beam\" ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\n  if [ -L owner ] || [ ! -f owner ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\n  if [ \"$(cat owner 2>/dev/null)\" != 'beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef' ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\n) || exit $?"
+      ]
+    },
+    {
+      "label": "reservedRoot",
+      "owner": "beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef",
+      "relative": [
+        ".beam"
+      ],
+      "create": true,
+      "output": [
+        "__beam_od_prefix=$(/bin/pwd -P) || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\nif [ -L ./.beam ] || [ ! -d ./.beam ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\ncd -P -- ./.beam 2>/dev/null || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\n__beam_od_prefix=\"$__beam_od_prefix\"/.beam\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\nif [ -L owner ] || [ ! -f owner ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\nif [ \"$(cat owner 2>/dev/null)\" != 'beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef' ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi"
+      ]
+    },
+    {
+      "label": "nestedCreate",
+      "owner": "beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef",
+      "relative": [
+        ".beam",
+        "git",
+        "gen 'quoted'"
+      ],
+      "create": true,
+      "output": [
+        "__beam_od_prefix=$(/bin/pwd -P) || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\nif [ -L ./.beam ] || [ ! -d ./.beam ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\ncd -P -- ./.beam 2>/dev/null || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\n__beam_od_prefix=\"$__beam_od_prefix\"/.beam\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\nif [ -L owner ] || [ ! -f owner ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\nif [ \"$(cat owner 2>/dev/null)\" != 'beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef' ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi",
+        "if [ -L 'git' ]; then echo 'beam: git is a symlink — refusing the owned transfer' >&2; exit 61; fi\n__beam_od_new=0; if [ ! -e 'git' ]; then mkdir -- 'git' || { echo 'beam: cannot create git' >&2; exit 66; }; __beam_od_new=1; fi\nif [ -L 'git' ] || [ ! -d 'git' ]; then echo 'beam: git is a symlink — refusing the owned transfer' >&2; exit 61; fi\ncd -P -- 'git' 2>/dev/null || { echo 'beam: git is a symlink — refusing the owned transfer' >&2; exit 61; }\n__beam_od_prefix=\"$__beam_od_prefix\"/'git'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo 'beam: git no longer resolves inside the owned workspace — refusing' >&2; exit 66; fi\nif [ \"$__beam_od_new\" = 1 ]; then chmod 700 . || { echo 'beam: cannot set the mode of git' >&2; exit 66; }; [ -n \"$(find . -prune -perm 700)\" ] || { echo 'beam: the mode of git did not verify' >&2; exit 66; }; fi",
+        "if [ -L 'gen '\\''quoted'\\''' ]; then echo 'beam: gen '\\''quoted'\\'' is a symlink — refusing the owned transfer' >&2; exit 61; fi\n__beam_od_new=0; if [ ! -e 'gen '\\''quoted'\\''' ]; then mkdir -- 'gen '\\''quoted'\\''' || { echo 'beam: cannot create gen '\\''quoted'\\''' >&2; exit 66; }; __beam_od_new=1; fi\nif [ -L 'gen '\\''quoted'\\''' ] || [ ! -d 'gen '\\''quoted'\\''' ]; then echo 'beam: gen '\\''quoted'\\'' is a symlink — refusing the owned transfer' >&2; exit 61; fi\ncd -P -- 'gen '\\''quoted'\\''' 2>/dev/null || { echo 'beam: gen '\\''quoted'\\'' is a symlink — refusing the owned transfer' >&2; exit 61; }\n__beam_od_prefix=\"$__beam_od_prefix\"/'gen '\\''quoted'\\'''\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo 'beam: gen '\\''quoted'\\'' no longer resolves inside the owned workspace — refusing' >&2; exit 66; fi\nif [ \"$__beam_od_new\" = 1 ]; then chmod 700 . || { echo 'beam: cannot set the mode of gen '\\''quoted'\\''' >&2; exit 66; }; [ -n \"$(find . -prune -perm 700)\" ] || { echo 'beam: the mode of gen '\\''quoted'\\'' did not verify' >&2; exit 66; }; fi"
+      ]
+    },
+    {
+      "label": "nestedRead",
+      "owner": "beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef",
+      "relative": [
+        ".beam",
+        "sessions",
+        "omp"
+      ],
+      "create": false,
+      "output": [
+        "__beam_od_prefix=$(/bin/pwd -P) || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\nif [ -L ./.beam ] || [ ! -d ./.beam ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\ncd -P -- ./.beam 2>/dev/null || { echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; }\n__beam_od_prefix=\"$__beam_od_prefix\"/.beam\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\nif [ -L owner ] || [ ! -f owner ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi\nif [ \"$(cat owner 2>/dev/null)\" != 'beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef' ]; then echo \"beam: the workspace is not owned by this handoff — refusing\" >&2; exit 52; fi",
+        "if [ -L 'sessions' ]; then echo 'beam: sessions is a symlink — refusing the owned transfer' >&2; exit 61; fi\nif [ ! -e 'sessions' ]; then echo 'beam: sessions is missing under the owned workspace — refusing' >&2; exit 67; fi\nif [ -L 'sessions' ] || [ ! -d 'sessions' ]; then echo 'beam: sessions is a symlink — refusing the owned transfer' >&2; exit 61; fi\ncd -P -- 'sessions' 2>/dev/null || { echo 'beam: sessions is a symlink — refusing the owned transfer' >&2; exit 61; }\n__beam_od_prefix=\"$__beam_od_prefix\"/'sessions'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo 'beam: sessions no longer resolves inside the owned workspace — refusing' >&2; exit 66; fi",
+        "if [ -L 'omp' ]; then echo 'beam: omp is a symlink — refusing the owned transfer' >&2; exit 61; fi\nif [ ! -e 'omp' ]; then echo 'beam: omp is missing under the owned workspace — refusing' >&2; exit 67; fi\nif [ -L 'omp' ] || [ ! -d 'omp' ]; then echo 'beam: omp is a symlink — refusing the owned transfer' >&2; exit 61; fi\ncd -P -- 'omp' 2>/dev/null || { echo 'beam: omp is a symlink — refusing the owned transfer' >&2; exit 61; }\n__beam_od_prefix=\"$__beam_od_prefix\"/'omp'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_od_prefix\" ]; then echo 'beam: omp no longer resolves inside the owned workspace — refusing' >&2; exit 66; fi"
+      ]
+    }
+  ]
+}

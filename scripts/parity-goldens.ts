@@ -36,6 +36,8 @@ import {
   type BeamRecord,
 } from "../src/state.ts";
 import type { ToolName } from "../src/session/types.ts";
+import { createWalkBlocks } from "../src/transport/local.ts";
+import { ownedDestinationBlocks } from "../src/workspace.ts";
 
 const GOLDENS_DIR = join(import.meta.dir, "..", "parity", "goldens");
 const FIXTURES_DIR = join(import.meta.dir, "..", "parity", "fixtures");
@@ -368,6 +370,31 @@ function stateGolden() {
   return { planSessionIdentity: planOutputs, isRemoteCwdResolved: cwdResolved };
 }
 
+const LOCAL_WALK_PATHS = [
+  "/",
+  "/tmp/beam/work",
+  "/tmp/ha rd 'quo$te` );&|/leaf",
+] as const;
+
+function localTransportGolden() {
+  const owner = "beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef";
+  const ownedCases = [
+    { label: "root", relative: [], create: false },
+    { label: "reservedRoot", relative: [".beam"], create: true },
+    { label: "nestedCreate", relative: [".beam", "git", "gen 'quoted'"], create: true },
+    { label: "nestedRead", relative: [".beam", "sessions", "omp"], create: false },
+  ];
+  return {
+    createWalkBlocks: LOCAL_WALK_PATHS.map((input) => {
+      return { input, output: createWalkBlocks(input) };
+    }),
+    ownedDestinationBlocks: ownedCases.map(({ label, relative, create }) => {
+      const output = ownedDestinationBlocks(owner, relative, { create });
+      return { label, owner, relative, create, output };
+    }),
+  };
+}
+
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes("--check");
   const goldens = new Map<string, string>([
@@ -376,6 +403,7 @@ async function main(): Promise<void> {
     ["config.json", serialize(configGolden())],
     ["cli-output.json", serialize(await cliOutputGolden())],
     ["state.json", serialize(stateGolden())],
+    ["local-transport.json", serialize(localTransportGolden())],
   ]);
   let drifted = false;
   for (const [name, rendered] of goldens) {
