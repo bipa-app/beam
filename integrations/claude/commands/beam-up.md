@@ -10,11 +10,12 @@ Steps:
 1. Run `beam up --tool claude -m "$ARGUMENTS"` (omit `-m` entirely when no
    arguments were given). Use the Bash tool; do not modify any files.
 2. If beam is not installed or no target is configured, show the error and
-   point the user at `beam init` / `beam doctor` — do not improvise a fix.
+   point the user at `beam setup box` / `beam check` — do not improvise a fix.
 3. On success, report back exactly:
    - the beam id and target from beam's output,
    - the watch commands: `beam status <id>` and `beam attach <id>`,
-   - that `beam down <id>` brings everything back and purges the remote copy.
+   - that `beam down <id>` stages a verified return, `beam integrate <id>`
+     applies it, and only `beam kill <id> --purge` erases the remote.
 4. Remind the user to EXIT this local session now — the transcript was
    shipped, and anything typed here afterward will not exist on the sandbox
    (beam backs up on return, but divergence is best avoided).

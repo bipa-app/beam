@@ -1,6 +1,6 @@
 import type { Transport } from "../transport/types.ts";
 import { run } from "../util/shell.ts";
-import type { ProviderDoctorReport, SandboxProvider } from "./types.ts";
+import type { ProviderCheckReport, SandboxProvider } from "./types.ts";
 
 /**
  * The trivial provider for targets that already exist (ssh, local): the
@@ -29,7 +29,7 @@ export class StaticProvider implements SandboxProvider {
 
   async destroy(): Promise<void> {}
 
-  async doctor(): Promise<ProviderDoctorReport> {
+  async check(): Promise<ProviderCheckReport> {
     const local = await run(["rsync", "--version"]);
     return { lines: [`local rsync:  ${local.code === 0 ? "ok" : "MISSING — install rsync"}`] };
   }

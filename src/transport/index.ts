@@ -10,14 +10,13 @@ export { SshTransport } from "./ssh.ts";
 export { KubectlTransport, type KubectlCoords } from "./kubectl.ts";
 
 /**
- * Transports for targets that already exist. Provisioned targets
- * (agent-sandbox) build theirs through their SandboxProvider, which must
- * resolve a live pod first.
+ * Transports for targets that already exist. Provisioned targets build
+ * theirs through their SandboxProvider after resolving a live resource.
  */
 export function createTransport(spec: SshTargetSpec | LocalTargetSpec): Transport {
   switch (spec.type) {
     case "ssh":
-      return new SshTransport(spec.host, spec.rsyncFlags);
+      return new SshTransport(spec.host, { rsyncFlags: spec.rsyncFlags });
     case "local":
       return new LocalTransport(spec.home, spec.rsyncFlags);
     default:

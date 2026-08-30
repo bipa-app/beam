@@ -1,10 +1,71 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { ensurePrivateBeamDir } from "./util/private-dir.ts";
 import type { BeamEnv } from "./env.ts";
 
 /** A remote (or local, for testing) place beam can ship workspaces to. */
-export type TargetSpec = SshTargetSpec | LocalTargetSpec | AgentSandboxTargetSpec;
+export type TargetSpec =
+  | BoxTargetSpec
+  | E2bTargetSpec
+  | ModalTargetSpec
+  | DaytonaTargetSpec
+  | SshTargetSpec
+  | LocalTargetSpec
+  | AgentSandboxTargetSpec;
+
+/** A disposable VM provisioned through the box.ascii.dev CLI. */
+export interface BoxTargetSpec {
+  type: "box";
+  /** Remote directory that holds shipped workspaces. Default: ~/beam. */
+  root?: string;
+  /** Box machine size. Omit for the account default. */
+  machineType?: "small" | "default" | "large";
+  /** Box environment carrying the user's configured credentials and setup. */
+  environment?: string;
+  /**
+   * Automatic stop in seconds. Omit to keep the Box running until the user
+   * returns or purges it; trial accounts can set 7200.
+   */
+  ttlSeconds?: number;
+}
+
+/** An E2B sandbox reached through an SSH-ready custom template. */
+export interface E2bTargetSpec {
+  type: "e2b";
+  /** E2B template id or alias with Beam's SSH startup contract. */
+  template: string;
+  /** Remote SSH user created by the template. Default: user. */
+  user?: string;
+  /** Active lifetime before E2B auto-pauses the sandbox. Default: 86400. */
+  timeoutSeconds?: number;
+  /** Remote directory that holds shipped workspaces. Default: ~/beam. */
+  root?: string;
+}
+
+/** A Modal Sandbox backed by a durable Modal Volume mounted at /root. */
+export interface ModalTargetSpec {
+  type: "modal";
+  /** Deployed Modal App that owns named sandboxes. Default: beam. */
+  app?: string;
+  /** OCI image containing the chosen coding harness. Default: debian:bookworm-slim. */
+  image?: string;
+  /** Compute lifetime before Beam recreates it around the Volume. Default: 86400. */
+  timeoutSeconds?: number;
+  /** Remote directory that holds shipped workspaces. Default: ~/beam. */
+  root?: string;
+}
+
+/** A Daytona sandbox provisioned through the authenticated Daytona CLI. */
+export interface DaytonaTargetSpec {
+  type: "daytona";
+  /** Snapshot used for new sandboxes. Omit for Daytona's default. */
+  snapshot?: string;
+  /** Daytona target region, such as us or eu. */
+  target?: string;
+  /** Remote directory that holds shipped workspaces. Default: ~/beam. */
+  root?: string;
+}
 
 export interface SshTargetSpec {
   type: "ssh";
@@ -33,7 +94,7 @@ export interface LocalTargetSpec {
  * and reaches the pod over `kubectl exec` (tar streams for files). The
  * kubeconfig given here is the blast radius — it is REQUIRED (beam never
  * falls back to the ambient kubeconfig) and must hold the least-privilege
- * beam-user credential: both `beam doctor` and `beam up` refuse, fail
+ * beam-user credential: both `beam check` and `beam up` refuse, fail
  * closed, a credential holding any of the enumerated escape capabilities
  * (template-bypassing pod/workload/Sandbox mutation, Secret access, RBAC
  * escalation, impersonation, cluster-wide reach) or one whose capabilities
@@ -78,9 +139,9 @@ export function targetRoot(spec: TargetSpec): string {
 }
 
 const SAMPLE_CONFIG: Config = {
-  defaultTarget: "sandbox",
+  defaultTarget: "box",
   targets: {
-    sandbox: { type: "ssh", host: "my-sandbox-server", root: "~/beam" },
+    box: { type: "box" },
   },
   excludes: [".DS_Store"],
 };
@@ -97,12 +158,23 @@ export function loadConfig(env: BeamEnv): Config {
   return parsed;
 }
 
+export function writeConfig(env: BeamEnv, config: Config): string {
+  const path = configPath(env);
+  ensurePrivateBeamDir(env.beamDir);
+  const temporary = `${path}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    writeFileSync(temporary, JSON.stringify(config, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    renameSync(temporary, path);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return path;
+}
+
 export function writeSampleConfig(env: BeamEnv): string {
   const path = configPath(env);
   if (existsSync(path)) return path;
-  ensurePrivateBeamDir(env.beamDir);
-  writeFileSync(path, JSON.stringify(SAMPLE_CONFIG, null, 2) + "\n");
-  return path;
+  return writeConfig(env, SAMPLE_CONFIG);
 }
 
 /** Resolve a target by name, falling back to default / sole target. */

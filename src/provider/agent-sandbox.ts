@@ -2,7 +2,13 @@ import type { AgentSandboxTargetSpec } from "../config.ts";
 import { KubectlTransport } from "../transport/kubectl.ts";
 import type { Transport } from "../transport/types.ts";
 import { run } from "../util/shell.ts";
-import type { ProviderDoctorReport, SandboxProvider, SandboxRef, SandboxState } from "./types.ts";
+import type {
+  AgentSandboxState,
+  ProviderCheckReport,
+  SandboxProvider,
+  SandboxRef,
+  SandboxState,
+} from "./types.ts";
 
 export const DEFAULT_CONTAINER = "sandbox";
 const CLAIM = "sandboxclaims.extensions.agents.x-k8s.io";
@@ -107,7 +113,7 @@ type DestroyDecision = { action: "delete"; uid: string } | { action: "leave"; me
  * same-name claim fails it closed, with manual recovery.
  *
  * The kubeconfig is the blast radius: it must be explicit (never the
- * ambient one), and both `beam doctor` and provisioning refuse — fail
+ * ambient one), and both `beam check` and provisioning refuse — fail
  * closed, before any claim is created — a credential holding any of the
  * enumerated escape capabilities probed by assertCredentialBoundary
  * (template-bypassing pod/workload/Sandbox mutation, Secret access, RBAC
@@ -138,8 +144,8 @@ export class AgentSandboxProvider implements SandboxProvider {
     this.label = `agent-sandbox ${spec.namespace} @ ${spec.context}`;
   }
 
-  sandboxState(ref: SandboxRef): SandboxState {
-    const derived: SandboxState = {
+  sandboxState(ref: SandboxRef): AgentSandboxState {
+    const derived: AgentSandboxState = {
       claim: `beam-${ref.id}`,
       context: this.spec.context,
       namespace: this.spec.namespace,
@@ -154,6 +160,12 @@ export class AgentSandboxProvider implements SandboxProvider {
     // Legacy records predate persisted coordinates: derive them from the
     // target snapshot, exactly as `beam up` would have persisted them.
     if (!persisted) return derived;
+    if (persisted.kind !== undefined) {
+      throw new Error(
+        `handoff ${ref.id} stores a non-Agent-Sandbox provider identity but its ` +
+          "target snapshot is agent-sandbox — state.json tampered or corrupted?",
+      );
+    }
     // Persisted coordinates come from state.json, which is hand-editable
     // and outlives config changes. Malformed names must die before argv
     // interpolation, and coordinates that disagree with this provider's own
@@ -218,7 +230,7 @@ export class AgentSandboxProvider implements SandboxProvider {
    * non-ownership, and otherwise fails closed toward manual recovery.
    */
   private verifyClaim(
-    coords: SandboxState,
+    coords: AgentSandboxState,
     recordId: string,
     claim: Record<string, unknown>,
   ): string {
@@ -295,7 +307,7 @@ export class AgentSandboxProvider implements SandboxProvider {
     ];
   }
 
-  private ns(coords: SandboxState): string[] {
+  private ns(coords: AgentSandboxState): string[] {
     return [...this.global(coords), "--namespace", coords.namespace];
   }
 
@@ -308,7 +320,7 @@ export class AgentSandboxProvider implements SandboxProvider {
    * is alive. Any nonzero exit throws.
    */
   private async getJson(
-    coords: SandboxState,
+    coords: AgentSandboxState,
     resource: string,
     name: string,
   ): Promise<Record<string, unknown> | undefined> {
@@ -343,14 +355,14 @@ export class AgentSandboxProvider implements SandboxProvider {
    * Sandbox object) so a same-named impostor cannot redirect the exec; the
    * pod must also be Running. Never cached.
    */
-  private async resolvePod(coords: SandboxState, recordId: string): Promise<string> {
+  private async resolvePod(coords: AgentSandboxState, recordId: string): Promise<string> {
     const hop = await this.resolveSandboxForClaim(coords, recordId);
     return await this.resolveRunningPod(coords, hop);
   }
 
   /** Chain hop 1: verified claim → its Sandbox object and the pod name it advertises. */
   private async resolveSandboxForClaim(
-    coords: SandboxState,
+    coords: AgentSandboxState,
     recordId: string,
   ): Promise<SandboxHop> {
     const claim = await this.getJson(coords, CLAIM, coords.claim);
@@ -409,7 +421,7 @@ export class AgentSandboxProvider implements SandboxProvider {
   }
 
   /** Chain hop 2: the advertised pod, owner-verified against the Sandbox, required Running. */
-  private async resolveRunningPod(coords: SandboxState, hop: SandboxHop): Promise<string> {
+  private async resolveRunningPod(coords: AgentSandboxState, hop: SandboxHop): Promise<string> {
     const { sandboxName, sandboxUid, podName } = hop;
     const pod = await this.getJson(coords, "pod", podName);
     if (!pod) {
@@ -481,7 +493,7 @@ export class AgentSandboxProvider implements SandboxProvider {
     // exactly this claim object — every later command refuses a same-name
     // claim whose UID differs (deleted-and-recreated = someone else's
     // workload).
-    const pinned: SandboxState = { ...coords, uid };
+    const pinned: AgentSandboxState = { ...coords, uid };
     ref.sandbox = pinned;
     persist?.(pinned);
     await this.waitForClaimReady(pinned, ref.id);
@@ -497,7 +509,10 @@ export class AgentSandboxProvider implements SandboxProvider {
    * absent. `-o json` echoes the created object, so the server-assigned UID
    * is captured from the SAME request that created it — no read-back race.
    */
-  private async createClaimPinned(coords: SandboxState, recordId: string): Promise<string> {
+  private async createClaimPinned(
+    coords: AgentSandboxState,
+    recordId: string,
+  ): Promise<string> {
     if (coords.uid !== undefined) {
       throw new Error(
         `SandboxClaim ${coords.claim} with original UID ${coords.uid} is gone — refusing ` +
@@ -546,7 +561,7 @@ export class AgentSandboxProvider implements SandboxProvider {
   }
 
   /** The created claim's UID, pinned from the create's own `-o json` echo. */
-  private pinnedUidFromCreate(coords: SandboxState, stdout: string): string {
+  private pinnedUidFromCreate(coords: AgentSandboxState, stdout: string): string {
     let createdObj: Record<string, unknown>;
     try {
       createdObj = JSON.parse(stdout) as Record<string, unknown>;
@@ -572,7 +587,10 @@ export class AgentSandboxProvider implements SandboxProvider {
    * record already points at it, so a retried `beam up` continues this boot
    * and `beam kill <id> --purge` abandons it.
    */
-  private async waitForClaimReady(pinned: SandboxState, recordId: string): Promise<void> {
+  private async waitForClaimReady(
+    pinned: AgentSandboxState,
+    recordId: string,
+  ): Promise<void> {
     console.log(
       `sandbox: waiting for Ready (cold boot can take ~15 min, ceiling ${READY_TIMEOUT})…`,
     );
@@ -736,7 +754,7 @@ export class AgentSandboxProvider implements SandboxProvider {
    * tool and auth failures ("credential-helper not found") throw.
    */
   private async deleteClaimPinned(
-    coords: SandboxState,
+    coords: AgentSandboxState,
     uid: string,
   ): Promise<"deleted" | "already-gone" | "replaced"> {
     const path =
@@ -834,7 +852,7 @@ export class AgentSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Fail-closed credential boundary, shared by provision() and doctor().
+   * Fail-closed credential boundary, shared by provision() and check().
    * The kubeconfig in beam's hands is also in the beamed agent's blast
    * radius, so a credential holding any of the enumerated escape
    * capabilities is refused BEFORE a claim exists — and any probe that
@@ -1024,7 +1042,7 @@ export class AgentSandboxProvider implements SandboxProvider {
     return probes;
   }
 
-  async doctor(): Promise<ProviderDoctorReport> {
+  async check(): Promise<ProviderCheckReport> {
     const lines: string[] = [];
     // An explicit path is taken as-is; a bare name must resolve on PATH.
     const found = this.bin.includes("/") ? this.bin : Bun.which(this.bin);

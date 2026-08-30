@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+if [ -z "${BEAM_SSH_PUBLIC_KEY:-}" ]; then
+  echo "beam-sandbox-start: BEAM_SSH_PUBLIC_KEY is required" >&2
+  exit 64
+fi
+set -- $BEAM_SSH_PUBLIC_KEY
+if [ "$#" -ne 2 ] || [ "$1" != "ssh-ed25519" ]; then
+  echo "beam-sandbox-start: only one ssh-ed25519 public key is accepted" >&2
+  exit 64
+fi
+case "$2" in
+  ""|*[!A-Za-z0-9+/=]*)
+    echo "beam-sandbox-start: the ssh-ed25519 key blob is malformed" >&2
+    exit 64
+    ;;
+esac
+
+install -d -m 0700 -o user -g user /home/user/.ssh
+printf '%s %s\n' "$1" "$2" > /home/user/.ssh/authorized_keys
+chown user:user /home/user/.ssh/authorized_keys
+chmod 0600 /home/user/.ssh/authorized_keys
+
+cat > /etc/ssh/sshd_config.d/beam.conf <<'EOF'
+Port 8081
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+EOF
+
+rm -f /etc/ssh/ssh_host_*
+ssh-keygen -A
+/usr/sbin/sshd
+touch /tmp/beam-ready
+exec sleep infinity

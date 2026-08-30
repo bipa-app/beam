@@ -34,7 +34,7 @@ import { cmdUp } from "../src/commands/up.ts";
 import type { AgentSandboxTargetSpec } from "../src/config.ts";
 import { resolveEnv } from "../src/env.ts";
 import { AgentSandboxProvider } from "../src/provider/agent-sandbox.ts";
-import type { SandboxState } from "../src/provider/types.ts";
+import type { AgentSandboxState, SandboxState } from "../src/provider/types.ts";
 import { HerdrRuntime } from "../src/runtime/herdr.ts";
 import { acquireOperationLock, loadState, updateRecord, type BeamRecord } from "../src/state.ts";
 import { KubectlTransport, markerWalkBlocks, syncMarkerFor } from "../src/transport/kubectl.ts";
@@ -50,6 +50,13 @@ import { run, runChecked, shq } from "../src/util/shell.ts";
 
 const PROCESS_TEST_TIMEOUT_MS = 30_000;
 setDefaultTimeout(PROCESS_TEST_TIMEOUT_MS);
+
+function agentSandboxState(state: SandboxState | undefined): AgentSandboxState {
+  if (state === undefined || state.kind !== undefined) {
+    throw new Error("test expected an Agent Sandbox identity");
+  }
+  return state;
+}
 
 /**
  * Canned kubectl: logs every argv verbatim, simulates claims as marker files
@@ -526,7 +533,7 @@ describe("agent-sandbox provider lifecycle", () => {
       // The exact coords `beam up` persisted — pinned UID included (commands
       // rebuild the provider from the record's targetSpec snapshot, so legit
       // flows always match).
-      const good = ref.sandbox!;
+      const good = agentSandboxState(ref.sandbox);
       const t = await p.connect({ id: "r1", sandbox: good });
       expect(t.label).toContain("beam-r1");
 
@@ -1162,12 +1169,12 @@ describe("agent-sandbox provider lifecycle", () => {
   );
 });
 
-describe("agent-sandbox doctor (least privilege)", () => {
+describe("agent-sandbox check (least privilege)", () => {
   test(
     "accepts the scoped beam-user credential and probes exec via --subresource, never pods/exec",
     async () => {
       const c = makeCluster();
-      const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+      const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
       expect(report.fatal).toBeUndefined();
       expect(report.lines.join("\n")).toMatch(/boundary:\s+ok/);
       expect(report.lines.join("\n")).toMatch(/rbac:\s+ok/);
@@ -1209,21 +1216,21 @@ describe("agent-sandbox doctor (least privilege)", () => {
   test("rejects a credential that can create SandboxClaims across all namespaces", async () => {
     const c = makeCluster();
     c.perms({ ...LEAST_PRIV, "create sandboxclaims.extensions.agents.x-k8s.io *": true });
-    const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+    const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
     expect(report.fatal).toMatch(/ALL namespaces/);
   });
 
   test("rejects a credential that can list SandboxClaims across all namespaces", async () => {
     const c = makeCluster();
     c.perms({ ...LEAST_PRIV, "list sandboxclaims.extensions.agents.x-k8s.io *": true });
-    const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+    const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
     expect(report.fatal).toMatch(/ALL namespaces/);
   });
 
   test("rejects a credential that can read Secrets in the namespace", async () => {
     const c = makeCluster();
     c.perms({ ...LEAST_PRIV, "get secrets beam-luiz": true });
-    const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+    const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
     expect(report.fatal).toMatch(/Secrets/);
   });
 
@@ -1232,7 +1239,7 @@ describe("agent-sandbox doctor (least privilege)", () => {
     const perms = { ...LEAST_PRIV };
     delete perms["create pods/exec beam-luiz"];
     c.perms(perms);
-    const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+    const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
     expect(report.fatal).toBeUndefined();
     expect(report.lines.join("\n")).toMatch(/MISSING.*exec into pods/);
   });
@@ -1240,7 +1247,7 @@ describe("agent-sandbox doctor (least privilege)", () => {
   test("a forbidden template read is reported as the exact missing narrow rule", async () => {
     const c = makeCluster();
     c.flag("template-forbidden");
-    const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+    const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
     expect(report.fatal).toBeUndefined();
     expect(report.lines.join("\n")).toMatch(/sandboxtemplates\/beam-coding/);
   });
@@ -1250,7 +1257,7 @@ describe("agent-sandbox doctor (least privilege)", () => {
     async () => {
       const c = makeCluster();
       c.perms({ ...LEAST_PRIV, "create pods beam-luiz": true });
-      const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+      const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
       expect(report.fatal).toMatch(/plain pods/);
     },
   );
@@ -1292,7 +1299,7 @@ describe("agent-sandbox doctor (least privilege)", () => {
       for (const [grant, match] of grants) {
         const c = makeCluster();
         c.perms({ ...LEAST_PRIV, [grant]: true });
-        const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+        const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
         expect(report.fatal).toMatch(match);
       }
     },
@@ -1302,7 +1309,7 @@ describe("agent-sandbox doctor (least privilege)", () => {
   test("fails closed when a boundary probe cannot be answered", async () => {
     const c = makeCluster();
     c.flag("can-i-fail");
-    const report = await new AgentSandboxProvider(makeSpec(), c.bin).doctor();
+    const report = await new AgentSandboxProvider(makeSpec(), c.bin).check();
     expect(report.fatal).toMatch(/fails closed/);
   });
 });
@@ -2486,14 +2493,14 @@ describe("agent-sandbox commands (canned kubectl on PATH)", () => {
     async () => {
       const record = loadState(resolveEnv()).records[0]!;
       await cmdDown([record.id]);
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
       expect(loadState(resolveEnv()).records[0]!.status).toBe("up");
 
       await expect(cmdUp(["--no-session", "--no-start"])).rejects.toThrow(/already up on k8s/);
       const records = loadState(resolveEnv()).records;
       expect(records.length).toBe(1);
       expect(records[0]!.id).toBe(record.id);
-      expect(readdirSync(c.claims)).toEqual([record.sandbox!.claim]);
+      expect(readdirSync(c.claims)).toEqual([agentSandboxState(record.sandbox).claim]);
     },
   );
 
@@ -2502,14 +2509,14 @@ describe("agent-sandbox commands (canned kubectl on PATH)", () => {
     async () => {
       const record = loadState(resolveEnv()).records[0]!;
       await cmdKill([record.id]);
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
       expect(loadState(resolveEnv()).records[0]!.status).toBe("up");
 
       await expect(cmdUp(["--no-session", "--no-start"])).rejects.toThrow(/already up on k8s/);
       const records = loadState(resolveEnv()).records;
       expect(records.length).toBe(1);
       expect(records[0]!.id).toBe(record.id);
-      expect(readdirSync(c.claims)).toEqual([record.sandbox!.claim]);
+      expect(readdirSync(c.claims)).toEqual([agentSandboxState(record.sandbox).claim]);
     },
   );
 
@@ -2521,11 +2528,13 @@ describe("agent-sandbox commands (canned kubectl on PATH)", () => {
     expect(
       readFileSync(join(latestReturnWorkspace(beamDir, record.id), "made-remotely.txt"), "utf8"),
     ).toBe("theirs\n");
-    expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+    expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
     expect(loadState(resolveEnv()).records[0]!.status).toBe("up");
     expect(
       c.argv().some(
-        (a) => a.includes("delete") && a.some((el) => el.includes(record.sandbox!.claim)),
+        (a) =>
+          a.includes("delete") &&
+          a.some((el) => el.includes(agentSandboxState(record.sandbox).claim)),
       ),
     ).toBe(false);
   });
@@ -2538,14 +2547,17 @@ describe("agent-sandbox commands (canned kubectl on PATH)", () => {
     } finally {
       rmSync(join(c.state, "exec-fail-pattern"));
     }
-    expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true); // claim preserved
+    // The failed return preserves the claim.
+    expect(
+      existsSync(join(c.claims, agentSandboxState(record.sandbox).claim)),
+    ).toBe(true);
     expect(loadState(resolveEnv()).records.find((r) => r.id === record.id)!.status).toBe("up");
     const dels = c
       .argv()
       .filter(
         (a) =>
           (a.includes("delete") || a.includes("--raw")) &&
-          a.some((el) => el.includes(record.sandbox!.claim)),
+          a.some((el) => el.includes(agentSandboxState(record.sandbox).claim)),
       );
     expect(dels.length).toBe(0); // no teardown after a failure
   });
@@ -2605,7 +2617,7 @@ describe("claim identity refusal across commands (canned kubectl on PATH)", () =
     async () => {
       await cmdUp(["--no-session", "--no-start"]);
       const record = loadState(resolveEnv()).records[0]!;
-      const claimFile = join(c.claims, record.sandbox!.claim);
+      const claimFile = join(c.claims, agentSandboxState(record.sandbox).claim);
       const stored = JSON.parse(readFileSync(claimFile, "utf8")) as { metadata: { uid: string } };
       // `beam up` persisted the created claim's server-assigned UID.
       expect(record.sandbox!.uid).toBe(stored.metadata.uid);
@@ -2751,12 +2763,16 @@ describe("agent-sandbox purge cleans the harness session store (persistent-home 
     await cmdDown([record.id]);
     expect(existsSync(remoteStore)).toBe(true);
     expect(existsSync(record.remoteCwd)).toBe(true);
-    expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+    expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
     expect(loadState(resolveEnv()).records.at(-1)!.status).toBe("up");
     const delta = c.argv().slice(argvBefore).map((a) => a.join(" "));
     expect(delta.some((a) => a.includes("rm -rf") && a.includes(record.remoteCwd))).toBe(false);
     expect(
-      delta.some((a) => a.includes("delete") && a.includes(record.sandbox!.claim)),
+      delta.some(
+        (a) =>
+          a.includes("delete") &&
+          a.includes(agentSandboxState(record.sandbox).claim),
+      ),
     ).toBe(false);
     await cmdKill([record.id, "--purge"]);
     expect(loadState(resolveEnv()).records.at(-1)!.status).toBe("killed");
@@ -2771,7 +2787,7 @@ describe("agent-sandbox purge cleans the harness session store (persistent-home 
       await cmdKill([record.id, "--purge"]);
       expect(existsSync(remoteStore)).toBe(false);
       expect(existsSync(record.remoteCwd)).toBe(false);
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(false);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(false);
       expect(loadState(resolveEnv()).records.at(-1)!.status).toBe("killed");
     },
     30000,
@@ -2940,7 +2956,7 @@ describe("handoff state machine (canned kubectl on PATH)", () => {
       if (loadState(resolveEnv()).records.length === 0) await cmdUp(["--no-start"]);
       const record = loadState(resolveEnv()).records[0]!;
       expect(record.wtGit).toBeUndefined();
-      const claimPath = join(c.claims, record.sandbox!.claim);
+      const claimPath = join(c.claims, agentSandboxState(record.sandbox).claim);
       const claimBytes = readFileSync(claimPath);
       rmSync(claimPath);
       await runChecked(["git", "-C", workDir, "init", "-q", "-b", "main"]);
@@ -2981,7 +2997,7 @@ describe("handoff state machine (canned kubectl on PATH)", () => {
         process.chdir(workDir);
       }
       expect(loadState(resolveEnv()).records.length).toBe(1);
-      expect(readdirSync(c.claims)).toEqual([active.sandbox!.claim]);
+      expect(readdirSync(c.claims)).toEqual([agentSandboxState(active.sandbox).claim]);
     },
   );
 
@@ -3039,11 +3055,11 @@ describe("handoff state machine (canned kubectl on PATH)", () => {
         rmSync(join(c.state, "delete-fail"));
       }
       expect(loadState(resolveEnv()).records[0]!.status).toBe("killing");
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
 
       // The DELETE had actually been acknowledged server-side (claim gone),
       // so the retry repeats provider destroy only and never reconnects.
-      rmSync(join(c.claims, record.sandbox!.claim));
+      rmSync(join(c.claims, agentSandboxState(record.sandbox).claim));
       const argvBefore = c.argv().length;
       await cmdKill([record.id, "--purge"]);
       expect(loadState(resolveEnv()).records[0]!.status).toBe("killed");
@@ -3446,7 +3462,7 @@ describe("unresolved default-root abandon and kill promotion rules (canned kubec
       expect(record.status).toBe("provisioning");
       expect(record.remoteCwd.startsWith("~/beam/")).toBe(true); // still the unresolved candidate
       expect(record.remoteCwdResolved).toBe(false);
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
 
       const argvBefore = c.argv().length;
       c.flag("exec-fail-pattern", "herdr"); // a broken image must not block claim deletion
@@ -3455,7 +3471,10 @@ describe("unresolved default-root abandon and kill promotion rules (canned kubec
       } finally {
         rmSync(join(c.state, "exec-fail-pattern"));
       }
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(false); // destroy was reached
+      // Provider destruction was reached despite the absent runtime.
+      expect(
+        existsSync(join(c.claims, agentSandboxState(record.sandbox).claim)),
+      ).toBe(false);
       expect(loadState(resolveEnv()).records[0]!.status).toBe("killed");
       // Nothing was ever shipped, so no rm ran — and the path guard never got
       // the chance to block the destroy.
@@ -3493,7 +3512,7 @@ describe("unresolved default-root abandon and kill promotion rules (canned kubec
       // …and remains abandonable afterwards.
       await cmdKill([prov.id, "--purge"]);
       expect(loadState(resolveEnv()).records.find((r) => r.id === prov.id)!.status).toBe("killed");
-      expect(existsSync(join(c.claims, prov.sandbox!.claim))).toBe(false);
+      expect(existsSync(join(c.claims, agentSandboxState(prov.sandbox).claim))).toBe(false);
     },
     30000,
   );
@@ -3580,7 +3599,7 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
         release();
       }
       // The losers touched NOTHING: claim, workspace, and status all intact.
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
       expect(existsSync(join(record.remoteCwd, "hello.txt"))).toBe(true);
       expect(loadState(resolveEnv()).records[0]!.status).toBe("up");
     },
@@ -3626,7 +3645,7 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
     // nothing destroyed — and the claim stays for the retry/abandon.
     expect(c.argv().length).toBe(argvBefore);
     expect(loadState(resolveEnv()).records.at(-1)!.status).toBe("provisioning");
-    expect(existsSync(join(c.claims, rec.sandbox!.claim))).toBe(true);
+    expect(existsSync(join(c.claims, agentSandboxState(rec.sandbox).claim))).toBe(true);
   });
 
   test(
@@ -3647,15 +3666,15 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
       await expect(cmdKill(["--purge"])).rejects.toThrow(/multiple live handoffs/);
       await expect(cmdKill(["--purge"])).rejects.toThrow(/beam kill <id> --purge/);
       // Nothing was selected, nothing was destroyed.
-      expect(existsSync(join(c.claims, prov.sandbox!.claim))).toBe(true);
-      expect(existsSync(join(c.claims, up.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(prov.sandbox).claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(up.sandbox).claim))).toBe(true);
 
       // The exact id abandons exactly the failed handoff — the up survives.
       await cmdKill([prov.id, "--purge"]);
       expect(loadState(resolveEnv()).records.find((r) => r.id === prov.id)!.status).toBe("killed");
-      expect(existsSync(join(c.claims, prov.sandbox!.claim))).toBe(false);
+      expect(existsSync(join(c.claims, agentSandboxState(prov.sandbox).claim))).toBe(false);
       expect(loadState(resolveEnv()).records.find((r) => r.id === up.id)!.status).toBe("up");
-      expect(existsSync(join(c.claims, up.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(up.sandbox).claim))).toBe(true);
     },
     PROCESS_TEST_TIMEOUT_MS,
   );
@@ -3675,7 +3694,7 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
       // A persistent volume could still hold the workspace and transcript:
       // the claim must remain the recovery handle until erasure is PROVEN.
       expect(loadState(resolveEnv()).records.find((r) => r.id === up.id)!.status).toBe("up");
-      expect(existsSync(join(c.claims, up.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(up.sandbox).claim))).toBe(true);
       expect(existsSync(join(up.remoteCwd, "other.txt"))).toBe(true);
     },
   );
@@ -3696,7 +3715,7 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
       // can outlive a claim): record, claim, and workspace all survive until
       // a CONNECTED purge proves the checked erasure.
       expect(loadState(resolveEnv()).records.find((r) => r.id === up.id)!.status).toBe("up");
-      expect(existsSync(join(c.claims, up.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(up.sandbox).claim))).toBe(true);
       expect(existsSync(join(up.remoteCwd, "other.txt"))).toBe(true);
     },
   );
@@ -3716,7 +3735,7 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
       // only the claim delete is pending.
       expect(loadState(resolveEnv()).records.find((r) => r.id === up.id)!.status).toBe("killing");
       expect(existsSync(up.remoteCwd)).toBe(false);
-      expect(existsSync(join(c.claims, up.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(up.sandbox).claim))).toBe(true);
 
       // Mid-kill is owned by `kill --purge` alone — down and plain kill both
       // name the exact recovery.
@@ -3738,7 +3757,7 @@ describe("down/kill operation ownership and phase matrix (canned kubectl)", () =
         delta.some((a) => a.includes("delete") && !a.includes("--raw") && !a.includes("can-i")),
       ).toBe(false);
       expect(loadState(resolveEnv()).records.find((r) => r.id === up.id)!.status).toBe("killed");
-      expect(existsSync(join(c.claims, up.sandbox!.claim))).toBe(false);
+      expect(existsSync(join(c.claims, agentSandboxState(up.sandbox).claim))).toBe(false);
     },
   );
 });
@@ -3999,7 +4018,7 @@ describe("physical workspace containment (canned kubectl)", () => {
       // already journaled, so the record parks mid-kill (`killing`).
       await expect(cmdKill([record.id, "--purge"])).rejects.toThrow(/refusing to purge|symlink/);
       expectOutsideIntact();
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(true);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(true);
       expect(loadState(resolveEnv()).records.at(-1)!.status).toBe("killing");
 
       // Restore the real workspace at the canonical path: the journaled retry
@@ -4008,7 +4027,7 @@ describe("physical workspace containment (canned kubectl)", () => {
       renameSync(aside, record.remoteCwd);
       await cmdKill([record.id, "--purge"]);
       expect(loadState(resolveEnv()).records.at(-1)!.status).toBe("killed");
-      expect(existsSync(join(c.claims, record.sandbox!.claim))).toBe(false);
+      expect(existsSync(join(c.claims, agentSandboxState(record.sandbox).claim))).toBe(false);
       expectOutsideIntact();
     },
     30000,
@@ -4088,7 +4107,7 @@ describe("receipted no-connection destroy convergence (canned kubectl)", () => {
       // Simulate the crash window where the destroy HAD succeeded but the
       // terminal `killed` was never written: the claim is gone out from
       // under a killing record whose receipts are complete.
-      rmSync(join(c.claims, parked.sandbox!.claim), { force: true });
+      rmSync(join(c.claims, agentSandboxState(parked.sandbox).claim), { force: true });
       const argvBefore = c.argv().length;
       await cmdKill([parked.id, "--purge"]);
       expect(
@@ -4115,13 +4134,16 @@ describe("receipted no-connection destroy convergence (canned kubectl)", () => {
       expect(
         loadState(resolveEnv()).records.find((r) => r.id === parked.id)!.status,
       ).toBe("killing"); // retained
-      expect(existsSync(join(c.claims, parked.sandbox!.claim))).toBe(true); // claim intact
+      // The failed API read leaves the claim intact.
+      expect(
+        existsSync(join(c.claims, agentSandboxState(parked.sandbox).claim)),
+      ).toBe(true);
       // Once the API answers again, the connected retry finishes normally.
       await cmdKill([parked.id, "--purge"]);
       expect(
         loadState(resolveEnv()).records.find((r) => r.id === parked.id)!.status,
       ).toBe("killed");
-      expect(existsSync(join(c.claims, parked.sandbox!.claim))).toBe(false);
+      expect(existsSync(join(c.claims, agentSandboxState(parked.sandbox).claim))).toBe(false);
     },
     30000,
   );
@@ -4132,7 +4154,7 @@ describe("receipted no-connection destroy convergence (canned kubectl)", () => {
       const parked = await parkReceiptedKill();
       // Out-of-band delete + recreate while beam was down: same name, label,
       // and template — only the server-assigned UID differs.
-      const claimFile = join(c.claims, parked.sandbox!.claim);
+      const claimFile = join(c.claims, agentSandboxState(parked.sandbox).claim);
       const stored = JSON.parse(readFileSync(claimFile, "utf8")) as { metadata: { uid: string } };
       stored.metadata.uid = "replacement-uid-w";
       writeFileSync(claimFile, JSON.stringify(stored));

@@ -1,13 +1,13 @@
 /**
- * Goal: `beam down` return-staging contracts — removed destructive/retention
- * flags stay rejected; the printed `--delete` integrate command is safe to
- * execute verbatim and protects every effective exclude plus `.git`/`.beam`
- * metadata; Beam-owned return storage is private (0700 dirs, 0600 receipts)
- * and refuses a symlink-replaced returns path before staging a single byte.
+ * Goal: `beam down` return-staging contracts — removed destructive flags
+ * stay rejected; `beam integrate` applies `--delete` returns while protecting
+ * every effective exclude plus `.git`/`.beam` metadata; Beam-owned return
+ * storage is private (0700 dirs, 0600 receipts) and refuses a symlink-replaced
+ * returns path before staging a single byte.
  *
- * Method: real `cmdUp`/`cmdDown` round trips over the local transport inside
- * hermetic BEAM_HOME/BEAM_DIR temp fixtures, executing the exact printed
- * command through bash and inspecting the resulting bytes and modes on disk.
+ * Method: Run real `cmdUp`/`cmdDown`/`cmdIntegrate` local-transport round
+ * trips inside hermetic BEAM_HOME/BEAM_DIR fixtures, then inspect the bytes,
+ * record receipts, and private modes on disk.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -25,10 +25,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cmdDown } from "../src/commands/down.ts";
+import { cmdIntegrate } from "../src/commands/integrate.ts";
 import { cmdUp } from "../src/commands/up.ts";
 import { resolveEnv } from "../src/env.ts";
 import { loadState } from "../src/state.ts";
-import { run, runChecked } from "../src/util/shell.ts";
+import { runChecked } from "../src/util/shell.ts";
 
 const HAVE_DEPS = Bun.which("git") !== null && Bun.which("rsync") !== null;
 const savedCwd = process.cwd();
@@ -51,13 +52,9 @@ test("beam down rejects every removed destructive/retention option", async () =>
   }
 }, 30_000);
 
-describe.skipIf(!HAVE_DEPS)("beam down printed stage integration", () => {
-  /**
-   * Runs `beam down <id> --delete` capturing stdout, and proves the printed
-   * integration contract: at least one "integrate it: " line, all of them
-   * identical. Returns the exact printed command for the caller to execute.
-   */
-  async function captureIntegrateCommand(recordId: string): Promise<string> {
+describe.skipIf(!HAVE_DEPS)("beam down staged integration", () => {
+  /** Collect and prove that down points at the first-class integrate command. */
+  async function collectReturn(recordId: string): Promise<void> {
     const output: string[] = [];
     const originalLog = console.log;
     console.log = (...args: unknown[]) => output.push(args.map(String).join(" "));
@@ -68,14 +65,13 @@ describe.skipIf(!HAVE_DEPS)("beam down printed stage integration", () => {
     }
     const integrateLines = output
       .map((line) => line.trim())
-      .filter((line) => line.startsWith("integrate it: "));
+      .filter((line) => line.startsWith("next: beam integrate "));
     expect(integrateLines.length).toBeGreaterThan(0);
-    expect(new Set(integrateLines).size).toBe(1);
-    return integrateLines[0]!.slice("integrate it: ".length);
+    expect(new Set(integrateLines)).toEqual(new Set([`next: beam integrate ${recordId}`]));
   }
 
   test(
-    "executing the exact printed --delete command protects every effective exclude",
+    "`beam integrate` protects every effective exclude in delete mode",
     async () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "beam-down-integrate-")));
       roots.push(root);
@@ -122,15 +118,14 @@ describe.skipIf(!HAVE_DEPS)("beam down printed stage integration", () => {
       mkdirSync(join(localCwd, ".beam"));
       writeFileSync(join(localCwd, ".beam", "local-only"), "keep\n");
 
-      const command = await captureIntegrateCommand(record.id);
+      await collectReturn(record.id);
 
       // A plain handoff cannot already be Git at collection time, but a
       // checkout may be initialized before the user runs the printed
       // command. The canonical Git exclude must protect it too.
       mkdirSync(join(localCwd, ".git"));
       writeFileSync(join(localCwd, ".git", "local-only"), "keep\n");
-      const integrated = await run(["bash", "-c", command]);
-      expect(integrated).toEqual({ code: 0, stdout: "", stderr: "" });
+      await cmdIntegrate([record.id, "--yes"], { json: false });
 
       expect(existsSync(join(localCwd, "eligible-deleted.txt"))).toBe(false);
       expect(readFileSync(join(localCwd, "returned.txt"), "utf8")).toBe("returned\n");
@@ -147,8 +142,7 @@ describe.skipIf(!HAVE_DEPS)("beam down printed stage integration", () => {
   );
 
   test(
-    "the Git return prints the same safe --delete command and executing it" +
-      " preserves repository metadata",
+    "Git return integration preserves repository metadata",
     async () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "beam-down-git-integrate-")));
       roots.push(root);
@@ -190,12 +184,11 @@ describe.skipIf(!HAVE_DEPS)("beam down printed stage integration", () => {
       mkdirSync(join(localCwd, ".beam"));
       writeFileSync(join(localCwd, ".beam", "local-only"), "keep\n");
 
-      const command = await captureIntegrateCommand(record.id);
+      await collectReturn(record.id);
 
       const head = (await runChecked(["git", "-C", localCwd, "rev-parse", "HEAD"])).stdout;
       const gitConfig = readFileSync(join(localCwd, ".git", "config"));
-      const integrated = await run(["bash", "-c", command]);
-      expect(integrated).toEqual({ code: 0, stdout: "", stderr: "" });
+      await cmdIntegrate([record.id, "--yes"], { json: false });
 
       expect(existsSync(join(localCwd, "eligible-deleted.txt"))).toBe(false);
       expect(readFileSync(join(localCwd, "returned.txt"), "utf8")).toBe("returned\n");

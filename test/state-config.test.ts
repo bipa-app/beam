@@ -12,10 +12,16 @@
  * directories built under mkdtemp — no real user state is read or written.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, resolveTarget, type LocalTargetSpec, type TargetSpec } from "../src/config.ts";
+import {
+  loadConfig,
+  resolveTarget,
+  writeSampleConfig,
+  type LocalTargetSpec,
+  type TargetSpec,
+} from "../src/config.ts";
 import type { BeamEnv } from "../src/env.ts";
 import { createProvider } from "../src/provider/index.ts";
 import { addRecord, findRecord, loadState, updateRecord, type BeamRecord } from "../src/state.ts";
@@ -106,6 +112,18 @@ describe("target resolution", () => {
     );
     expect(resolveTarget(loadConfig(env)).name).toBe("x");
   });
+
+  test("writeSampleConfig makes Box the zero-configuration default target", () => {
+    const env = tempEnv();
+    const path = writeSampleConfig(env);
+    const config = JSON.parse(readFileSync(path, "utf8")) as {
+      defaultTarget: string;
+      targets: Record<string, TargetSpec>;
+    };
+    expect(config.defaultTarget).toBe("box");
+    expect(config.targets).toEqual({ box: { type: "box" } });
+    expect(resolveTarget(config).spec.type).toBe("box");
+  });
 });
 
 describe("state file read boundary", () => {
@@ -166,6 +184,13 @@ describe("runtime discriminant boundaries", () => {
     const spec = { type: "teleport", root: "/r" } as unknown as LocalTargetSpec;
     expect(() => createTransport(spec)).toThrow(/beam \(invariant\)/);
     expect(() => createTransport(spec)).toThrow(/teleport/);
+  });
+
+  test("createProvider routes every managed target through its lifecycle seam", () => {
+    expect(createProvider({ type: "box" }).label).toBe("box.ascii.dev");
+    expect(createProvider({ type: "e2b", template: "beam-ssh" }).label).toBe("E2B");
+    expect(createProvider({ type: "modal" }).label).toBe("Modal");
+    expect(createProvider({ type: "daytona" }).label).toBe("Daytona");
   });
 
   test("createProvider refuses an unknown target type instead of guessing a provider", () => {

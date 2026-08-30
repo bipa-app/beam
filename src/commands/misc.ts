@@ -43,6 +43,7 @@ import {
 } from "../security.ts";
 import { run, shjoin, shq, shqRemotePath } from "../util/shell.ts";
 import { sessionStageRoot } from "./up.ts";
+import { inspectBeamSkills, type SkillState } from "./skill.ts";
 
 /**
  * Terminal `killed` write. The pending-ship journal dies with the handoff,
@@ -66,8 +67,8 @@ export async function cmdInit(): Promise<void> {
   if (existed) {
     console.log("config already exists — left untouched");
   } else {
-    console.log("edit it: set your sandbox host (any ssh destination works)");
-    console.log("then verify with `beam doctor`");
+    console.log("default target: Box (run `box onboard` once if needed)");
+    console.log("verify the provider with `beam check`");
   }
 }
 
@@ -474,53 +475,188 @@ async function killPurgeErase(
   );
 }
 
-/** Both doctor exits end on the same reminder: log in on the target, never copy credentials. */
-const DOCTOR_LOGIN_HINT =
-  "\ncredentials never travel with beam — authenticate each harness on the target " +
-  "with `beam login`.";
-
-/** beam doctor [target] — verify the pieces a handoff needs. */
-export async function cmdDoctor(args: string[]): Promise<void> {
-  const env = resolveEnv();
-  const config = loadConfig(env);
-  const { name, spec } = resolveTarget(config, args[0]);
-  const provider = createProvider(spec);
-  console.log(`target ${name} (${provider.label})`);
-
-  const report = await provider.doctor();
-  for (const line of report.lines) console.log(`  ${line}`);
-  if (report.fatal) {
-    console.error(`  REJECTED:     ${report.fatal}`);
-    process.exitCode = 1;
-    return;
+/** End checks with the authentication path that can actually reach this target. */
+function checkLoginHint(spec: TargetSpec): string {
+  if (spec.type === "box") {
+    return (
+      "\nconfigure harness credentials in the Box Environment; for a live handoff, " +
+      "`beam login box --tool <harness>` also works. beam never copies credentials."
+    );
   }
-
-  // The provider report above audits the CURRENT config; the optional
-  // sandbox connectivity/tool checks below run against the live handoff,
-  // which stays bound to its recorded spec snapshot.
-  const active = latestUpForTarget(env, name);
-  // A legacy active record (no snapshot) is never bound: audit the current
-  // config alone rather than guess which machine the record meant.
-  const bound = active?.targetSpec !== undefined ? active : undefined;
-  const live = bound ? createProvider(recordSpec(bound)) : provider;
-  let t: Transport;
-  try {
-    t = await live.connect(bound);
-  } catch (err) {
-    console.log(`  sandbox:      ${err instanceof Error ? err.message : String(err)}`);
-    console.log(DOCTOR_LOGIN_HINT);
-    return;
+  if (spec.type === "e2b") {
+    return (
+      "\nthe E2B template must install the harness; authenticate it on a live handoff " +
+      "with `beam login`. beam never copies credentials."
+    );
   }
-
-  // Live checks bind through the spec beam would actually use: the active
-  // handoff's snapshot when one exists, else the current config.
-  const liveSpec = bound ? recordSpec(bound) : spec;
-  const root = targetRoot(liveSpec);
-  if (!(await doctorRemoteChecks(t, name, root))) return;
-  console.log(DOCTOR_LOGIN_HINT);
+  if (spec.type === "modal") {
+    return (
+      "\nthe Modal image must install the harness; authenticate it on a live handoff " +
+      "with `beam login`. beam never copies credentials."
+    );
+  }
+  if (spec.type === "daytona") {
+    return (
+      "\nthe Daytona snapshot must install the harness; authenticate it on a live " +
+      "handoff with `beam login`. beam never copies credentials."
+    );
+  }
+  return (
+    "\ncredentials never travel with beam — authenticate each harness on the target " +
+    "with `beam login`."
+  );
 }
 
-export const DOCTOR_SENTINEL = "__beam_doctor_v1__";
+export interface BeamCheck {
+  id: string;
+  scope: "local" | "provider" | "remote";
+  status: "fail" | "pass" | "skip" | "warn";
+  message: string;
+  fixCommand?: string;
+}
+
+export interface BeamCheckResult {
+  target: string;
+  ready: boolean;
+  checks: BeamCheck[];
+}
+
+const SKILL_STATE_MESSAGES: Record<SkillState, string> = {
+  current: "version-matched Beam skill installed",
+  foreign: "foreign skill occupies Beam's path",
+  missing: "Beam skill is not installed",
+  owned: "Beam-owned skill is stale",
+  unsafe: "Beam skill path is not a safe regular file",
+};
+
+function appendLocalSkillChecks(home: string, checks: BeamCheck[]): void {
+  for (const inspection of inspectBeamSkills(home)) {
+    const current = inspection.state === "current";
+    const message = `${inspection.tool}: ${SKILL_STATE_MESSAGES[inspection.state]} ` +
+      `(${inspection.path})`;
+    const repairable = inspection.state === "missing" || inspection.state === "owned";
+    checks.push({
+      id: `local.skill.${inspection.tool}`,
+      scope: "local",
+      status: current ? "pass" : "warn",
+      message,
+      ...(repairable
+        ? { fixCommand: `beam skill install --tool ${inspection.tool} --scope user` }
+        : {}),
+    });
+    console.log(`  skill ${inspection.tool}: ${current ? "ok" : inspection.state}`);
+  }
+}
+
+/** beam check [target] — verify the pieces a handoff needs. */
+export async function cmdCheck(args: string[]): Promise<BeamCheckResult> {
+  const { values, positionals } = parseArgs({
+    args,
+    options: { tool: { type: "string" } },
+    allowPositionals: true,
+    strict: true,
+  });
+  if (positionals.length > 1) throw new Error("usage: beam check [target] [--tool <tool>]");
+  const tool = values.tool === undefined ? undefined : adapterFor(values.tool as ToolName).tool;
+  const env = resolveEnv();
+  const config = loadConfig(env);
+  const { name, spec } = resolveTarget(config, positionals[0]);
+  const provider = createProvider(spec);
+  const checks: BeamCheck[] = [];
+  appendLocalSkillChecks(env.home, checks);
+  console.log(`target ${name} (${provider.label})`);
+  const report = await provider.check();
+  for (const line of report.lines) {
+    checks.push({
+      id: `provider.${checks.length}`,
+      scope: "provider",
+      status: "pass",
+      message: line,
+    });
+    console.log(`  ${line}`);
+  }
+  if (report.fatal) {
+    checks.push({
+      id: "provider.ready",
+      scope: "provider",
+      status: "fail",
+      message: report.fatal,
+    });
+    console.error(`  REJECTED:     ${report.fatal}`);
+    process.exitCode = 1;
+    return { target: name, ready: false, checks };
+  }
+  const ready = await checkRemoteTarget({ env, name, spec, provider, tool, checks });
+  return { target: name, ready, checks };
+}
+
+async function checkRemoteTarget(options: {
+  env: BeamEnv;
+  name: string;
+  spec: TargetSpec;
+  provider: SandboxProvider;
+  tool: ToolName | undefined;
+  checks: BeamCheck[];
+}): Promise<boolean> {
+  const { env, name, spec, provider, tool, checks } = options;
+  const active = latestUpForTarget(env, name);
+  const bound = active?.targetSpec !== undefined ? active : undefined;
+  if (!bound && spec.type !== "local" && spec.type !== "ssh") {
+    const message = "no active sandbox; remote checks will run after the first handoff";
+    checks.push({ id: "remote.live", scope: "remote", status: "skip", message });
+    console.log(`  sandbox:      ${message}`);
+    console.log(checkLoginHint(spec));
+    return true;
+  }
+  const liveSpec = bound ? recordSpec(bound) : spec;
+  const live = bound ? createProvider(liveSpec) : provider;
+  let transport: Transport;
+  try {
+    transport = await live.connect(bound);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    checks.push({ id: "remote.connectivity", scope: "remote", status: "fail", message });
+    console.error(`  sandbox:      ${message}`);
+    process.exitCode = 1;
+    return false;
+  }
+  const imageRequired = codingImageRequired(liveSpec);
+  const remote = await checkRemoteReadinessReport(transport, {
+    name,
+    root: targetRoot(liveSpec),
+    tool,
+    requireCodingImage: imageRequired,
+  });
+  appendCodingImageCheck(remote, imageRequired, checks);
+  checks.push({
+    id: "remote.ready",
+    scope: "remote",
+    status: remote.ready ? "pass" : "fail",
+    message: remote.ready ? "remote handoff prerequisites are ready" : "remote checks failed",
+  });
+  console.log(checkLoginHint(liveSpec));
+  if (!remote.ready) process.exitCode = 1;
+  return remote.ready;
+}
+
+function appendCodingImageCheck(
+  remote: RemoteCheckReport,
+  required: boolean,
+  checks: BeamCheck[],
+): void {
+  let status: BeamCheck["status"] = "pass";
+  if (remote.imageVersion === undefined) status = required ? "fail" : "skip";
+  const message = remote.imageVersion === undefined
+    ? "Beam coding image marker is absent"
+    : `Beam coding image ${remote.imageVersion}`;
+  checks.push({ id: "remote.coding-image", scope: "remote", status, message });
+}
+
+function codingImageRequired(spec: TargetSpec): boolean {
+  return spec.type === "e2b" || spec.type === "modal" || spec.type === "daytona";
+}
+
+export const CHECK_SENTINEL = "__beam_check_v1__";
 
 /** Record keys embed adapter binaries; the static set must stay key-safe. */
 const BINARY_KEY_SHAPE = /^[a-z][a-z0-9._-]*$/;
@@ -529,13 +665,11 @@ const BINARY_KEY_SHAPE = /^[a-z][a-z0-9._-]*$/;
 const REMOTE_TOOLS = ["rsync", "herdr"] as const;
 
 /**
- * Every remote doctor question fused into one script: tool/harness
- * presence, adapter-driven auth probes (only when the harness binary
- * resolved, mirroring the historical per-exec flow), and workspace-root
- * creation. Auth probe snippets come from the adapters verbatim.
+ * Every remote check fused into one script: tools, harnesses, auth probes,
+ * and workspace-root creation. Auth snippets come from adapters verbatim.
  */
-function doctorProbeScript(root: string): string {
-  const lines = [...probeScriptPrelude(DOCTOR_SENTINEL)];
+function checkProbeScript(root: string): string {
+  const lines = [...probeScriptPrelude(CHECK_SENTINEL)];
   for (const bin of REMOTE_TOOLS) {
     lines.push(
       `__beam_v=$(command -v ${bin} 2>/dev/null); __beam_rc=$?`,
@@ -560,22 +694,21 @@ function doctorProbeScript(root: string): string {
     }
   }
   lines.push(
+    `if [ -r /etc/beam-coding-image ]; then`,
+    `  __beam_v=$(cat /etc/beam-coding-image 2>/dev/null); __beam_rc=$?`,
+    `else __beam_v=""; __beam_rc=1; fi`,
+    `__beam_emit image "$__beam_rc" "$__beam_v"`,
     `__beam_v=$({ mkdir -p ${shqRemotePath(root)} &&`,
     `  cd ${shqRemotePath(root)} && pwd; } 2>/dev/null)`,
     `__beam_emit root "$?" "$__beam_v"`,
-    ...probeScriptTrailer(DOCTOR_SENTINEL),
+    ...probeScriptTrailer(CHECK_SENTINEL),
   );
   return lines.join("\n");
 }
 
-/**
- * The fused doctor result must contain EXACTLY the expected records: every
- * tool, every adapter binary, the root probe, and an auth record if and
- * only if that adapter defines a probe AND its binary resolved. Anything
- * else — missing, extra, or inconsistent — is malformed (fail closed).
- */
-function checkDoctorRecordSet(records: Map<string, ProbeRecord>): void {
-  const expected = new Set<string>(["root"]);
+/** Reject missing, extra, or inconsistent records from the fused script. */
+function checkRemoteRecordSet(records: Map<string, ProbeRecord>): void {
+  const expected = new Set<string>(["image", "root"]);
   for (const bin of REMOTE_TOOLS) expected.add(`tool.${bin}`);
   for (const adapter of ADAPTERS) {
     expected.add(`bin.${adapter.binary}`);
@@ -590,67 +723,91 @@ function checkDoctorRecordSet(records: Map<string, ProbeRecord>): void {
   }
 }
 
-/**
- * Remote half of `beam doctor`: exactly TWO transport round trips
- * regardless of adapter or probe count — one fused probe script for
- * connectivity/tools/harnesses/root, then probePrivilege's single fused
- * script. Returns false when connectivity failed (the caller skips the
- * trailing login hint, matching the historical early return). Exported
- * for transport-double tests.
- */
-export async function doctorRemoteChecks(
-  t: Transport,
-  name: string,
-  root: string,
+interface RemoteCheckOptions {
+  name: string;
+  root: string;
+  tool?: ToolName;
+  requireCodingImage?: boolean;
+}
+
+interface RemoteCheckReport {
+  ready: boolean;
+  imageVersion: string | undefined;
+}
+
+/** Preserve the public boolean probe contract used by transport tests. */
+export async function checkRemoteReadiness(
+  transport: Transport,
+  options: RemoteCheckOptions,
 ): Promise<boolean> {
-  const probe = await t.exec(doctorProbeScript(root));
+  return (await checkRemoteReadinessReport(transport, options)).ready;
+}
+
+/** Run every remote readiness probe in at most two transport round trips. */
+async function checkRemoteReadinessReport(
+  transport: Transport,
+  options: RemoteCheckOptions,
+): Promise<RemoteCheckReport> {
+  const probe = await transport.exec(checkProbeScript(options.root));
   if (probe.code !== 0) {
     console.log(`  connectivity: FAILED — ${probe.stderr.trim()}`);
-    return false;
+    return { ready: false, imageVersion: undefined };
   }
   let records: Map<string, ProbeRecord>;
   try {
-    records = parseProbeRecords(DOCTOR_SENTINEL, probe.stdout);
-    checkDoctorRecordSet(records);
-  } catch (err) {
-    console.log(`  connectivity: FAILED — ${err instanceof Error ? err.message : String(err)}`);
-    return false;
+    records = parseProbeRecords(CHECK_SENTINEL, probe.stdout);
+    checkRemoteRecordSet(records);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`  connectivity: FAILED — ${message}`);
+    return { ready: false, imageVersion: undefined };
   }
   console.log("  connectivity: ok");
+  const imageRecord = requireProbeRecord(records, "image");
+  const imageVersion = imageRecord.code === 0 ? imageRecord.value.trim() : "";
+  const imageReady = imageVersion !== "";
+  console.log(`  coding image: ${imageReady ? imageVersion : "not a Beam release image"}`);
+  let ready = true;
+  if (options.requireCodingImage && !imageReady) ready = false;
   for (const bin of REMOTE_TOOLS) {
-    const rec = requireProbeRecord(records, `tool.${bin}`);
+    const record = requireProbeRecord(records, `tool.${bin}`);
     const pad = " ".repeat(Math.max(1, 6 - bin.length));
-    console.log(`  remote ${bin}:${pad}${rec.code === 0 ? rec.value.trim() : "MISSING"}`);
+    console.log(`  remote ${bin}:${pad}${record.code === 0 ? record.value.trim() : "MISSING"}`);
+    if (record.code !== 0) ready = false;
   }
   for (const adapter of ADAPTERS) {
-    const rec = requireProbeRecord(records, `bin.${adapter.binary}`);
+    const record = requireProbeRecord(records, `bin.${adapter.binary}`);
     const pad = " ".repeat(Math.max(1, 6 - adapter.binary.length));
-    if (rec.code !== 0) {
+    if (record.code !== 0) {
       console.log(`  remote ${adapter.binary}:${pad}not installed`);
+      if (options.tool === adapter.tool) ready = false;
       continue;
     }
     let auth = "";
     if (adapter.remoteAuthProbe) {
-      const authRec = requireProbeRecord(records, `auth.${adapter.binary}`);
+      const authRecord = requireProbeRecord(records, `auth.${adapter.binary}`);
       auth =
-        authRec.code === 0
+        authRecord.code === 0
           ? " · authenticated"
-          : ` · NOT LOGGED IN → beam login ${name} --tool ${adapter.tool}`;
+          : ` · NOT LOGGED IN → beam login ${options.name} --tool ${adapter.tool}`;
+      if (options.tool === adapter.tool && authRecord.code !== 0) ready = false;
     }
-    console.log(`  remote ${adapter.binary}:${pad}${rec.value.trim()}${auth}`);
+    console.log(`  remote ${adapter.binary}:${pad}${record.value.trim()}${auth}`);
   }
-  const rootRec = requireProbeRecord(records, "root");
-  const rootLine = rootRec.code === 0 ? rootRec.value.trim() : `cannot create ${root}`;
+  const rootRecord = requireProbeRecord(records, "root");
+  const rootLine =
+    rootRecord.code === 0 ? rootRecord.value.trim() : `cannot create ${options.root}`;
   console.log(`  root:         ${rootLine}`);
-  if (rootRec.code === 0) {
-    const posture = await probePrivilege(t, rootRec.value.trim());
-    if (posture.warnings.length === 0) {
-      console.log(`  privilege:    ok (user ${posture.user}, no dangerous posture)`);
-    } else {
-      for (const w of posture.warnings) console.log(`  privilege:    WARNING — ${w}`);
+  if (rootRecord.code !== 0) return { ready: false, imageVersion: undefined };
+  const posture = await probePrivilege(transport, rootRecord.value.trim());
+  if (posture.warnings.length === 0) {
+    console.log(`  privilege:    ok (user ${posture.user}, no dangerous posture)`);
+  } else {
+    for (const warning of posture.warnings) {
+      console.log(`  privilege:    WARNING — ${warning}`);
     }
   }
-  return true;
+  return { ready, imageVersion: imageReady ? imageVersion : undefined };
 }
 
 export const LOGIN_HELP =

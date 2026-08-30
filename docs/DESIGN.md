@@ -15,12 +15,9 @@
 3. **Return.** `beam down`. The remote agent stops, and the returned
    workspace AND grown transcript are collected, verified, and persisted as
    a local stage under `~/.beam/returns/<id>/<txn>/` — the live repository,
-   checkout, and harness session store are left byte-for-byte unchanged, and
-   the remote copy is retained. Inspect and integrate the workspace stage
-   (beam prints the exact path and command) and resume the session straight
-   off the returned transcript (omp/pi) or via the printed manual import
-   (Claude Code/Codex): the conversation contains everything the agent did
-   remotely.
+   checkout, and harness session store remain unchanged. `beam integrate`
+   itemizes the return, confirms, re-proves the ship-time local base, and
+   applies it. The remote stays retained until explicit purge.
 
 The invariant: **session + workspace move as one unit, losslessly, in both
 directions.** Outbound they mirror; on return they are collected and
@@ -31,18 +28,18 @@ silently applied over live local state.
 
 ```
 beam CLI (Bun/TS, zero runtime deps)
-  up · down · attach · status · ls · kill · doctor · init · targets
+  up · down · integrate · attach · status · ls · kill · check · setup · skill
         │
         ├── SessionAdapter   what a "session" is for one harness
         │     omp · pi · claude · codex
         │     locate / install / resumeArgv / collect
         │
         ├── SandboxProvider  the lifecycle above a transport
-        │     static (ssh, local) · agent-sandbox (GKE SandboxClaims)
-        │     sandboxState / provision / connect / destroy / doctor
+        │     static (ssh, local) · managed SSH (Box, E2B, Modal, Daytona)
+        │     agent-sandbox (GKE SandboxClaims)
         │
         ├── Transport        how to reach the sandbox's shell + files
-        │     ssh (v1 remote) · kubectl exec (tar streams) · local (tests)
+        │     ssh/rsync · kubectl exec (tar streams) · local (tests)
         │     exec / syncUp / syncDown / sendFile / fetchFile
         │
         └── Runtime          where the agent process lives
@@ -54,15 +51,17 @@ beam CLI (Bun/TS, zero runtime deps)
   transcript back. A new harness is one new adapter (~100 lines).
 - **SandboxProvider** (`src/provider/types.ts`) — create the place a handoff
   ships to, rebind to it later, tear it down. ssh/local are the trivial
-  `StaticProvider` (the machine already exists; provision = the transport).
-  `agent-sandbox` owns one SandboxClaim per handoff record. Commands only
-  talk to this seam — no target-type branching outside it.
-- **Transport** (`src/transport/types.ts`) — v1 remote is plain `ssh`/`rsync`/
-  `scp`, so `~/.ssh/config` aliases, jump hosts, and keys work unchanged and
-  the server needs no daemon. The kubectl transport reaches an Agent Sandbox
-  pod over `kubectl exec` with tar streams for files (the `kubectl cp`
-  mechanism): no sshd, no open port, context/namespace/kubeconfig pinned on
-  every argv. Sync-down never deletes local files unless `--delete`, and a
+  `StaticProvider` because the machine already exists. Box, E2B, Modal, and
+  Daytona own one provider resource per handoff; `agent-sandbox` owns one
+  SandboxClaim. Commands only talk to this seam — no target-type branching
+  outside it.
+- **Transport** (`src/transport/types.ts`) — Box, E2B, Modal, Daytona, and raw
+  SSH use `ssh`/`rsync`/`scp`. Managed providers supply a pinned key or
+  short-lived access token plus re-resolved coordinates; raw targets retain
+  normal `~/.ssh/config` aliases, jump hosts, and keys. The kubectl transport
+  reaches an Agent Sandbox pod over `kubectl exec` with tar streams for files:
+  no sshd, no open port, context/namespace/kubeconfig pinned on every argv.
+  Sync-down never deletes local files unless `--delete`, and a
   kubectl mirrored (`--delete`) sync-down is licensed by a remote marker
   that attests only to the latest COMPLETED syncUp attempt: every ship
   invalidates it as its first remote action and re-earns it only on full
@@ -83,7 +82,7 @@ overrides, which is how tests isolate themselves.
 1. **Full workspace mirror, not git bundles.** rsync the dev folder — dirty
    tree, untracked files, `.env` — while `.git` always stays out of the
    filtered mirror. When the source is a Git workspace, its trusted state
-   moves out of band as a self-contained standalone `.git` (decision 9).
+   moves out of band as a self-contained standalone `.git` (decision 13).
    Delta transfer makes re-ships cheap. Excludes via `.beamignore` + config.
    Caveat: build artifacts do not cross OS/arch; exclude `target/` and
    `node_modules/` when shipping from macOS to Linux and let the sandbox
@@ -108,9 +107,10 @@ overrides, which is how tests isolate themselves.
    `beam attach` is `ssh -t … herdr session attach`.
 4. **Kickoff prompt in the resume argv.** `beam up -m "…"` appends the message
    to the resume command so the agent starts working unattended.
-5. **ssh is the server API.** Any box you can ssh into is a target. A richer
-   backend (HTTP daemon, provisioning API) slots in later as another
-   Transport+Runtime pair without touching commands.
+5. **ssh is the data-plane API.** Any server you can ssh into is a static
+   target. Managed provisioning stays above that interface: Box, E2B, Modal,
+   and Daytona own lifecycle and supply SSH coordinates, while commands and
+   the runtime remain unchanged.
 6. **Retain by default; destruction is separate and explicit.** `beam down`
    collects everything and RETAINS the remote workspace and sandbox: the
    record stays `up` and reusable, and down has no destructive flag. This
@@ -120,15 +120,17 @@ overrides, which is how tests isolate themselves.
    --purge` is operator-authorized abandonment of every remaining remote
    byte. It does not collect or claim fingerprint safety; it kills the pane,
    removes installed session traces, erases the contained workspace, and
-   destroys provisioned resources. Claim deletion is never trusted as
-   storage erasure because persistent volumes can outlive it. Cleanup is
-   checked, and an unreachable sandbox whose record resolved a remote cwd
-   fails with the record and claim intact — with one narrow exception:
-   when BOTH owner-bound cleanup receipts are already journaled (workspace
-   emptied, traces cleaned), the only step a crash can have lost is the
-   claim delete or its terminal write, and the agent-sandbox provider
-   finishes that delete by pinned UID alone — absence converges to
-   `killed`, a same-name replacement or API failure retains. Static
+   destroys provisioned resources. Claim or VM deletion is never trusted as
+   storage erasure because persistent snapshots and volumes can outlive it.
+   Cleanup is checked, and an unreachable sandbox whose record resolved a
+   remote cwd fails with the record and resource intact — with one narrow
+   exception: when BOTH owner-bound cleanup receipts are already journaled
+   (workspace emptied, traces cleaned), the only step a crash can have lost
+   is provider deletion or its terminal write. A managed provider may then
+   delete only the exact persisted identity: Agent Sandbox uses a pinned
+   claim UID; Box, E2B, and Daytona use immutable provider IDs; Modal uses an
+   owned Sandbox name plus exact tags and a Volume owner marker. Absence
+   converges to `killed`; a replacement or API failure retains. Static
    targets have no managed lifecycle and always refuse unreachable purges.
    Once erasure completes, the
    record journals `killing` before provider destruction, so an interrupted
@@ -154,9 +156,10 @@ overrides, which is how tests isolate themselves.
    refuses when more than one record still owns remote resources. One
    `(target, localCwd)` pair maps to one active record regardless of
    provider exclusivity — the remote workspace path is derived from exactly
-   that pair — while non-exclusive targets (ssh/local) still host distinct
-   workspaces concurrently. `beam up` also journals the exclude set of
-   every successful ship on the record; `beam down` unions it with the
+   that pair. Non-exclusive providers host distinct workspaces concurrently;
+   managed providers give each one its own resource. `beam up` also journals
+   the exclude set of every successful ship on the record;
+   `beam down` unions it with the
    current excludes, so a path excluded outbound (never shipped) can never
    be mirrored away locally by `--delete` after config/`.beamignore` drift.
 
@@ -182,7 +185,70 @@ overrides, which is how tests isolate themselves.
    the destination first — remote build artifacts inside the workspace do
    not survive a mirrored re-ship.
 
-9. **Every Git workspace ships a materialized standalone `.git` — and its
+9. **Box is managed lifecycle over the existing SSH transport.** `beam init`
+   chooses a zero-option Box target. `BoxProvider` runs the documented
+   `box --json` protocol: it persists the opaque ID on the `created` line
+   before waiting for `ready`, re-reads `box info` on every connect, resumes
+   a stopped VM, and never persists an IP. It asks `box ssh <id> -- true` to
+   establish the CLI-managed key, then uses `SshTransport` with
+   `IdentitiesOnly`, batch mode, `accept-new`, and `HostKeyAlias=<box-id>`;
+   rsync receives the same options through `--rsh`. Provisioning verifies and
+   installs pinned herdr plus rsync in one remote bootstrap. Omitted
+   `ttlSeconds` means `--no-auto-stop`; trials can set 7200. Purge first
+   erases Beam-owned bytes, then permanently deletes the exact Box.
+   Exclusively owned snapshots go with it; named snapshots and forks created
+   outside Beam may retain shared storage and remain the operator's cleanup.
+   The CLI rather than `@asciidev/box-sdk` is deliberate: it preserves zero
+   runtime dependencies, browser onboarding, and managed SSH keys.
+
+10. **E2B is REST lifecycle plus its documented WebSocket SSH proxy.**
+    `E2bProvider` uses built-in `fetch`, not a runtime SDK. Before any API
+    effect it persists a random owner token and the SHA-256 fingerprint of a
+    per-handoff Ed25519 key. Creation sends the configured template, auto-pause
+    policy, and exact `beam.owner` / `beam.record` metadata; crash recovery
+    lists by those values before creating anything. Every connect re-reads the
+    exact sandbox ID, template, and metadata, then resumes it through
+    `/connect`. `SshTransport` reaches the template's port 8081 proxy through
+    local `websocat`, pins `HostKeyAlias` to the sandbox ID, and uses only the
+    managed key. Purge verifies identity, deletes that ID, then removes the
+    local private key. The custom template owns sshd readiness and must place
+    the injected public key in `authorized_keys`.
+
+11. **Modal separates replaceable compute from an owned durable Volume.**
+    `ModalProvider` drives the authenticated Modal CLI through one bounded
+    temporary Python bridge, preserving the zero-runtime-dependency rule. It
+    persists an owner token, deterministic Sandbox/Volume names, and the
+    per-handoff key fingerprint before remote effects. A named Sandbox carries
+    exact owner/record tags; a V2 Volume mounted at `/root` carries an exact
+    owner marker. The marker earns a `volumeOwned` receipt before Beam may
+    adopt or delete it. Modal's 24-hour Sandbox ceiling is unavoidable, so a
+    later connection recreates expired compute around the same Volume and
+    reboots pinned herdr when the ephemeral Sandbox ID changes. A raw TCP
+    tunnel exposes key-only SSH, with `HostKeyAlias` pinned to that compute
+    ID. Purge verifies tags and marker, terminates compute, deletes the owned
+    Volume, then removes the local key.
+
+12. **Daytona lifecycle stays behind its authenticated CLI.**
+    `DaytonaProvider` persists a random owner token and deterministic name
+    before creation, labels the sandbox with owner/record identity, disables
+    automatic pause/archive/delete/TTL, and pins the returned immutable ID.
+    Every connect and destroy re-read exact ID, name, and labels. The current
+    CLI does not expose SSH coordinates directly: `daytona ssh` resolves a
+    short-lived token and executes `ssh`. Beam supplies a temporary capture
+    executable in `PATH`, accepts only the two documented argv shapes, and
+    passes the parsed token destination to `SshTransport` without persisting
+    it. A stopped sandbox is started with bounded status polling. Purge deletes
+    only the verified ID.
+
+
+Managed setup is provider-owned (`src/provider/setup.ts`): commands request a
+plan or apply it but never branch on provider type. Release builds also pin one
+immutable `ghcr.io/bipa-app/beam-coding@sha256:…` identity into the executable.
+E2B templates, Modal sandboxes, and Daytona snapshots therefore use the image
+published from the same release tag. Source builds must receive an explicit
+immutable digest; setup refuses mutable tags and conflicting resources.
+
+13. **Every Git workspace ships a materialized standalone `.git` — and its
    Git state round-trips losslessly.** A linked worktree's `.git` is a host
    path pointer; a standard checkout's `.git` contains config and hooks the
    sandbox must never copy back onto the host. `gatherExcludes` therefore
@@ -276,14 +342,16 @@ overrides, which is how tests isolate themselves.
    mirror). Only then is the proven stage sealed with a `manifest.json`
    receipt; a stage without one is never trusted, and a txn root that
    already journaled a session receipt is retained as retry evidence. The
-   stage is the user's to inspect and
-   integrate. The exact printed `rsync` argv carries the same effective
-   exclude union as collection/fingerprinting, so `--delete` protects every
-   locally excluded path. Applying over a live tree cannot be made atomic,
-   so beam never does it, and a racing local editor can never lose a byte
-   to a down; (4) objects are imported WHOLESALE into the common repository
-   — content-addressed and
-   additive, packs before their indexes, each file published create-only
+   stage is the user's to inspect and integrate. The manifest carries the
+   exact effective exclude union and deletion license, so `beam integrate`
+   reconstructs one itemized preview and protects every excluded local path.
+   Applying over a live tree cannot be atomic; integration re-proves the
+   ship-time local base after human confirmation and checks convergence after
+   the apply. A writer observed by the base proof refuses; the caller must
+   still quiesce local writers because one that starts after the final proof
+   can race the non-atomic apply; (4) objects are imported WHOLESALE into the
+   common repository — content-addressed and additive, packs before their
+   indexes, each file published create-only
    via link(2) after streaming-digest verification, so concurrent imports
    into one common repository converge on identical content and refuse
    divergent content with the destination untouched — carrying
@@ -341,6 +409,19 @@ overrides, which is how tests isolate themselves.
    destruction, but does not recollect or claim return-fingerprint safety.
    Detached or concurrent writes after the last down are discarded.
 
+   `beam integrate` is the only first-class live-worktree writer. It holds
+   the record operation lock, binds the latest manifest path through Beam's
+   private-directory chain, verifies its state-journaled SHA-256 and staged
+   tree fingerprint, then copies that proven return to a fresh immutable
+   local source. It itemizes the exact rsync operation before confirmation.
+   A non-empty apply proceeds only while the destination directory's
+   device/inode and its filtered full-tree digest still match the completed
+   `beam up`; a prompt causes that base proof to run again. The apply uses the
+   manifest's exact excludes and deletion license, then an empty post-apply
+   dry run proves convergence. Repeated integration is an empty, idempotent
+   success. Local drift, stage drift, and legacy records without either pin
+   refuse without a live-worktree write.
+
    Beam's local storage is private by construction: `BEAM_DIR` and every
    `returns/<record>/<txn>` parent is proven component-wise to be a real,
    process-owned directory (never a symlink) and closed to group/other
@@ -351,7 +432,7 @@ overrides, which is how tests isolate themselves.
    disclosure boundary.
 
 
-10. **Physical containment, proven on the target.** Every remote workspace
+14. **Physical containment, proven on the target.** Every remote workspace
     path must be a strict *physical* descendant of the configured root —
     lexical checks cannot see symlinks, and on a reusable sandbox the
     deterministic workspace path can be pre-created as a symlink to any
@@ -393,7 +474,7 @@ honest* below.
 **Network — control plane.** One full round trip per `exec`: a fresh `ssh`
 handshake or a fresh `kubectl exec` API call. Nothing is multiplexed or
 reused, so per-call cost (tens to low hundreds of ms on a WAN) is paid every
-time. Per command, branch-dependent: `doctor` ≤ 11 probes + ≤ 6 privilege
+time. Per command, branch-dependent: `check` ≤ 11 probes + ≤ 6 privilege
 probes ≈ 17; `up` ≈ 15–20 (workspace establish, containment re-proofs,
 fingerprint sandwiches, git pointer, session install, herdr start); `down`
 ≈ 15–25 (agent stop, git collect, stage probes, session collect, final
@@ -403,18 +484,45 @@ count, and transcript size — always.** A probe that scales with the tree
 belongs inside one generated remote script (the workspace fingerprint is the
 pattern), never in a loop of `exec` calls.
 
+Managed providers add a bounded control plane before SSH:
+
+- Box reconnects with `box info` plus key registration. A stopped Box adds
+  `box resume` and at most `BOX_READY_ATTEMPTS_MAX` (300) one-second polls.
+- E2B reconnects with one identity `GET` and one `/connect` request. Creation
+  adds one metadata-filtered recovery list plus one create request.
+- Modal runs one bounded bridge process per lifecycle operation; the bridge
+  batches the SDK calls needed to find or create the named Sandbox and Volume,
+  wait at most 300 seconds for SSH readiness, and resolve one tunnel.
+- Daytona reconnects with one `info` plus one SSH-token command. A stopped
+  sandbox adds one `start` and at most `DAYTONA_READY_ATTEMPTS_MAX` (300)
+  one-second `info` polls.
+
+These counts are O(1) in workspace and repository size. Fresh provision adds
+one SSH bootstrap before the ordinary `up` sequence. Modal repeats that
+bootstrap only when its replaceable compute ID changes.
+
+`beam setup` adds only provider-CLI control-plane calls: one bounded
+inspection in plan mode, then one re-inspection, one create, and one
+verification in apply mode. It never provisions a handoff.
+
 **Network — data plane.** Two transfers on `up` (workspace stage, `.git`
 payload) plus explicit per-path session transfers; three on `down` (`.git`
-quarantine, workspace stage, session collect). Bytes on the ssh transport ≈
-changed bytes (rsync delta) + file-list overhead; on the kubectl transport ≈
-the **whole** tree, compressed, on every sync — tar has no delta, so a
-re-ship costs a full copy and empties the destination first. kubectl bulk
-transfers stage ONE archive per direction, bind it to a size+sha256
-receipt, and retry the raw copy up to `SYNC_ARCHIVE_ATTEMPTS_MAX` (6)
+quarantine, workspace stage, session collect). `integrate` is local-only: it
+copies and fingerprints the returned stage once, runs one initial preview, and
+runs up to two copy-plus-fingerprint local-base proofs (the second only after
+an interactive prompt), one apply, and one convergence preview. Its temporary
+source is one full returned workspace and is always reaped. Bytes on Box, E2B,
+Modal, Daytona, and raw SSH
+are approximately changed bytes (rsync delta) plus file-list overhead; on the
+kubectl transport they are the **whole** tree, compressed, on every sync — an
+ordinary re-ship costs a full copy and empties the destination first.
+Kubectl bulk transfers stage ONE archive per direction, bind it to a
+size+sha256 receipt, and retry the raw copy up to
+`SYNC_ARCHIVE_ATTEMPTS_MAX` (6)
 times before extracting — the GKE gVisor exec stream was measured
 corrupting ~1 in 3 large transfers (2026-08-29), and extraction must only
-ever read a verified archive. A git workspace
-also ships its full object closure (`clone --no-hardlinks --dissociate`), so
+ever read a verified archive. A Git workspace also ships its full object
+closure (`clone --no-hardlinks --dissociate`), so
 worst-case outbound ≈ workspace bytes + repository bytes, and a return
 collects the same again. **Bound: one batched transfer per logical payload;
 no per-file transfers. `beam up` refuses a filtered mirror larger than
@@ -424,20 +532,22 @@ explicitly licenses the ship (an unnoticed cargo `target/` once rode the
 mirror for hours).**
 
 **Peak buffered memory.** Hashing is O(1) in file size: `fileSha256` streams
-through one reused 1 MiB buffer because workspace files and git packs reach
-gigabytes. Everything else is where the risk lives — `run()` buffers each
-subprocess's stdout/stderr whole, and transcript reads load a whole JSONL
-into one string. **Bound: peak resident buffers stay O(1) in workspace, repo,
-and transcript size; every read whose size is tree-, agent-, or
-remote-controlled carries a named `MAX_*` ceiling.** In force today:
-`MAX_REFLOG_TOTAL_BYTES` 32 MiB, `MAX_REFLOG_TOTAL_LINES` 100 000,
-`MAX_REFLOG_UNIQUE_OIDS` and `MAX_DANGLING_OBJECTS` 200 000,
-`MAX_REFLOG_ENUMERATED_FILES` 65 536, `MAX_REFLOG_FILES` 4 096,
-`MAX_STASH_REFLOG_LINES` 4 096, `HEADER_SCAN_BYTES` 64 KiB. Known gaps,
-tracked in `.planning/2026-08-09-tiger-style/findings.md`: the remote
-fingerprint manifest (grows with remote file count), generic `run()` capture,
-whole-transcript reads, and codex `locate`'s `CANDIDATE_SCAN_COUNT = 400`
-whole-file reads.
+through one reused 1 MiB buffer because workspace files and Git packs reach
+gigabytes. `run()` captures up to `DEFAULT_MAX_OUTPUT_BYTES` (16 MiB) per
+stream, and transcript reads load a whole JSONL into one string. **Bound:
+peak resident buffers stay O(1) in workspace, repository, and transcript
+size; every read whose size is tree-, agent-, or remote-controlled carries a
+named `MAX_*` ceiling.** In force today: Box, E2B, Modal, and Daytona control
+plane output is capped at 1 MiB; E2B HTTP calls time out after 120 seconds;
+Box and Daytona readiness polling stop after 300 one-second attempts; Daytona
+SSH argv capture is capped at 16 KiB; `MAX_REFLOG_TOTAL_BYTES` 32 MiB,
+`MAX_REFLOG_TOTAL_LINES` 100 000, `MAX_REFLOG_UNIQUE_OIDS` and
+`MAX_DANGLING_OBJECTS` 200 000, `MAX_REFLOG_ENUMERATED_FILES` 65 536,
+`MAX_REFLOG_FILES` 4 096, `MAX_STASH_REFLOG_LINES` 4 096, and
+`HEADER_SCAN_BYTES` 64 KiB. Known gaps, tracked in
+`.planning/2026-08-09-tiger-style/findings.md`: the remote fingerprint
+manifest (grows with remote file count), whole-transcript reads, and Codex
+`locate`'s `CANDIDATE_SCAN_COUNT = 400` whole-file reads.
 
 **Disk.** Local per `up`: one immutable ship stage (≈ workspace bytes after
 excludes) plus one temp standalone `.git` (≈ object closure), both removed on
@@ -451,6 +561,13 @@ bounded by handoff-record count. Remote: one workspace + one `.git` payload +
 the transcript. **Bound: no unbounded accumulation — every temp path is
 cleaned on all outcomes, and retained stages are the user's explicit
 inventory, never implicit growth.**
+
+Managed providers add one isolated resource per active workspace. Box and
+Daytona keep compute available until explicit purge; E2B auto-pauses after its
+configured active timeout; Modal may stop compute after at most 24 hours but
+retains the owned Volume. Retention prevents an unattended agent from stopping
+mid-task where the provider permits it, but billing and stored state continue
+until purge.
 
 **CPU and subprocesses.** Beam is thin orchestration: cost is spawn count
 plus sha256 over moved bytes. The stability proofs are deliberately
@@ -503,33 +620,41 @@ codex scans newest-first and parses `session_meta`.
   The default `beam down` RETAINS the remote workspace (secrets included) so
   no concurrent write can be destroyed unseen. Once you have integrated the
   staged return — or accepted abandoning any later remote state — run
-  `beam kill <id> --purge` to erase every remote trace.
+  `beam kill <id> --purge` to erase every Beam-managed remote trace.
 - **openrsync (macOS) vs GNU rsync** — conservative default flags (`-a -z`),
   per-target `rsyncFlags` override.
-- **Credentials never travel.** beam refuses the "copy auth.json to the
-  server" shortcut on principle: the session moves, the user re-authenticates
-  on the target via `beam login <target> --tool <harness>` (interactive over
-  `ssh -t`, or `kubectl exec -it` on agent-sandbox targets). What outlives an
-  agent-sandbox claim is template-dependent: with ephemeral pods, auth dies
-  with the claim; with a persistent home, logins survive — beam's purge
-  erases the workspace and session files it installed before the claim is
-  deleted, but not credentials the user created.
-  Best-effort auth probes in `beam doctor` and `beam up` surface a login gap
-  early; where a harness has no file-detectable auth state (omp), the probe
-  is absent rather than wrong.
-- **The transport credential is the blast radius.** For raw transports (ssh,
-  kubectl) the sandbox boundary is whatever the operator configured — beam
-  cannot create isolation it was not given. The stance:
-  - preach a paved path (README: dedicated unprivileged ssh user; a
-    beam-user ServiceAccount scoped to claim lifecycle + pods/exec in one
-    namespace for agent-sandbox, behind a REQUIRED explicit kubeconfig);
-  - probe for dangerous postures (`src/security.ts`: root login,
-    passwordless sudo, workspace root outside the user's home when the box
-    is observably shared, a mounted ServiceAccount token, a mounted Docker
-    socket) in `doctor` and before every `up` — warn, never block, since
-    compensating controls exist that beam cannot see;
+- **Credentials never travel through Beam.** Beam refuses the
+  "copy auth.json to the server" shortcut. Raw SSH and Agent Sandbox users
+  authenticate on a reachable target via
+  `beam login <target> --tool <harness>`. Box users configure credentials and
+  setup in a Box Environment before creation. E2B templates, Modal images, and
+  Daytona snapshots install the harness; a live handoff then accepts
+  `beam login`. What survives resource replacement is provider-dependent:
+  E2B memory snapshots, Modal's `/root` Volume, and Daytona's retained
+  sandbox preserve login state; Agent Sandbox depends on its template.
+  Beam's purge erases only the workspace and session files it installed, not
+  credentials created outside them. Best-effort auth probes surface a login
+  gap early; where a harness has no file-detectable auth state, the probe is
+  absent rather than wrong.
+- **The transport or provider credential is the blast radius.** For raw
+  transports (SSH, kubectl) the sandbox boundary is whatever the operator
+  configured — Beam cannot create isolation it was not given. Managed
+  provider credentials stay local: Box, E2B, Modal, and Daytona credentials
+  can create and delete account resources; E2B and Modal receive only a
+  per-handoff public SSH key; Daytona's temporary SSH token is never
+  persisted. The stance:
+  - preach a paved path (README: dedicated unprivileged ssh user; dedicated
+    provider project/workspace/organization; a beam-user ServiceAccount
+    scoped to claim lifecycle + pods/exec in one namespace for agent-sandbox,
+    behind a REQUIRED explicit kubeconfig);
+  - probe provider authentication plus dangerous remote postures
+    (`src/security.ts`: root login, passwordless sudo, workspace root outside
+    the user's home when the box is observably shared, a mounted
+    ServiceAccount token, a mounted Docker socket) in `check` and before
+    every `up` — warn, never block, since compensating controls exist that
+    Beam cannot see;
   - one exception blocks: the agent-sandbox provider REFUSES — fail closed,
-    in both `doctor` and `beam up` before any claim is created — a
+    in both `check` and `beam up` before any claim is created — a
     credential holding any of the enumerated escape capabilities:
     cluster-wide claim create/list/delete, claim patch/update, any Secret
     access (get/list/watch/create/patch/update/delete/deletecollection),
@@ -562,16 +687,15 @@ codex scans newest-first and parses `session_meta`.
     returned UID immediately) and otherwise fails closed, with the error
     naming the manual recovery (inspect, delete by hand if yours, then
     `beam kill --purge` retires the record).
-  Managed providers (Daytona, E2B, Modal) enforce the boundary vendor-side,
-  which stays an argument for more provider implementations over
-  ever-fancier raw-transport hardening.
+  Managed providers enforce the compute boundary vendor-side, but configured
+  templates, images, snapshots, and account environments still define which
+  secrets the agent receives. That is safer than hardening a shared raw
+  server, not a reason to inject every account secret.
 
 ## Later
 
 - More providers behind `SandboxProvider`: a `gce` provider (start/stop the
-  own-sandbox VM around handoffs — see `docs/own-sandbox.md`), box.ascii.dev
-  (native ssh + snapshot/fork, CLI `--json`, zero new deps — parked as the
-  managed-provider experiment), Daytona, E2B.
+  own-sandbox VM around handoffs — see `docs/own-sandbox.md`) and Fly.
 - Drive `beam status` from herdr's agent state API (`herdr agent list` /
   `herdr agent get`): structured working/blocked/idle for every handoff
   instead of a pane-text glimpse.

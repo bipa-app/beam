@@ -1,8 +1,16 @@
-import { run, runChecked, shq, shqRemotePath } from "../util/shell.ts";
+import { run, runChecked, shjoin, shq, shqRemotePath } from "../util/shell.ts";
 import { ownedDestinationScript } from "../workspace.ts";
 import type { ExecResult, SyncOptions, Transport } from "./types.ts";
 
 const DEFAULT_RSYNC_FLAGS = ["-a", "-z"];
+
+export interface SshTransportOptions {
+  rsyncFlags?: string[];
+  /** Provider-owned SSH argv inserted before the destination. */
+  sshOptions?: string[];
+  /** Provider-facing label when a raw address is only an implementation detail. */
+  label?: string;
+}
 
 /**
  * Transport over plain `ssh`/`rsync`/`scp`. The host is any ssh destination,
@@ -10,10 +18,12 @@ const DEFAULT_RSYNC_FLAGS = ["-a", "-z"];
  */
 export class SshTransport implements Transport {
   readonly label: string;
+  private readonly rsyncFlags: string[];
+  private readonly sshOptions: string[];
 
   constructor(
     private readonly host: string,
-    private readonly rsyncFlags: string[] = DEFAULT_RSYNC_FLAGS,
+    options: SshTransportOptions = {},
   ) {
     // The host is config-sourced and becomes a positional ssh/rsync/scp
     // argument. Refuse anything ssh would parse as an option BEFORE any
@@ -31,7 +41,9 @@ export class SshTransport implements Transport {
           "a ~/.ssh/config alias",
       );
     }
-    this.label = `ssh ${host}`;
+    this.label = options.label ?? `ssh ${host}`;
+    this.rsyncFlags = options.rsyncFlags ?? DEFAULT_RSYNC_FLAGS;
+    this.sshOptions = options.sshOptions ?? [];
   }
 
   /**
@@ -165,7 +177,9 @@ export class SshTransport implements Transport {
   }
 
   async exec(command: string): Promise<ExecResult> {
-    return run(["ssh", this.host, "--", "bash", "-lc", shq(command)]);
+    return run([
+      "ssh", ...this.sshOptions, this.host, "--", "bash", "-lc", shq(command),
+    ]);
   }
 
   async execChecked(command: string): Promise<string> {
@@ -193,6 +207,9 @@ export class SshTransport implements Transport {
       ...(opts.checksum ? ["--checksum"] : []),
       ...(opts.excludes ?? []).map((e) => `--exclude=${e}`),
       ...(remoteProgram === undefined ? [] : [`--rsync-path=${remoteProgram}`]),
+      ...(this.sshOptions.length === 0
+        ? []
+        : [`--rsh=${shjoin(["ssh", ...this.sshOptions])}`]),
       source,
       dest,
     ];
@@ -236,6 +253,15 @@ export class SshTransport implements Transport {
   }
 
   interactiveArgv(command: string): string[] {
-    return ["ssh", "-t", this.host, "--", "bash", "-lc", shq(command)];
+    return [
+      "ssh",
+      ...this.sshOptions,
+      "-t",
+      this.host,
+      "--",
+      "bash",
+      "-lc",
+      shq(command),
+    ];
   }
 }

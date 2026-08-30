@@ -33,8 +33,12 @@ interface BeamExtensionApi {
   ): void;
 }
 
-const SUBCOMMANDS = ["up", "down", "ls", "status", "attach", "kill", "doctor", "targets"];
-const USAGE = `usage: /beam up [-m "kickoff"] | ls | status [id] | down [id] | doctor`;
+const SUBCOMMANDS = [
+  "up", "down", "integrate", "ls", "status", "attach", "kill", "check", "targets",
+];
+const USAGE =
+  `usage: /beam up [-m "kickoff"] | ls | status [id] | down [id] | ` +
+  `integrate [id] | check`;
 
 /** Split on whitespace, honoring double- and single-quoted phrases. */
 function tokenize(input: string): string[] {
