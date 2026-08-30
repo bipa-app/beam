@@ -309,12 +309,12 @@ first draft.
    No second exec helper, no formatter, no linter, no test framework beyond
    `bun test`.
 3. **Scripts in the primary language** — adopt: `scripts/*.ts` run by Bun,
-   never `scripts/*.sh`. Two n/a exceptions, both because a runtime cannot be
-   assumed to exist: `docs/own-sandbox-bootstrap.sh` (a VM startup script
-   that installs the toolchain a typed replacement would need) and the POSIX
-   shell Beam generates for the target (the remote's runtime is exactly what
-   Beam must not assume). Both stay `sh`, and every string in them goes
-   through `shq`/`shjoin`/`shqRemotePath` (Security invariants).
+   never `scripts/*.sh`. Three n/a exceptions cannot assume a runtime:
+   `docs/own-sandbox-bootstrap.sh` installs the toolchain a typed replacement
+   would need; public `site/install` runs before Beam or Bun exists; and the
+   target bootstrap is generated POSIX shell because Beam cannot assume a
+   remote runtime. Checked-in bootstraps quote every local path. Every string
+   in generated remote shell goes through `shq`/`shjoin`/`shqRemotePath`.
 
 ## Git & PR workflow
 

@@ -30,7 +30,7 @@ jobs:
       - name: Assemble static site
         run: |
           mkdir public
-          cp site/index.html site/robots.txt site/sitemap.xml public/
+          cp site/index.html site/install site/robots.txt site/sitemap.xml public/
           cp -R assets public/assets
       - uses: actions/upload-pages-artifact@v3
         with:
