@@ -740,9 +740,10 @@ tempfile. Growing the list is an architecture decision recorded here.
 `cargo deny` gates advisories, licenses, sources, and bans in CI;
 `Cargo.lock` is committed; `rust/deny.toml`'s license list grows only in the
 PR that adds the dependency needing it.
-**Rust style.** The beam Tiger rules re-derive for Rust at cutover; the port
-adopts four bipa practices (`~/work/bipa/master/AGENTS.md`, `clippy.toml`)
-from day one, as review law the syn-based checker will gate:
+**Rust style.** The beam Tiger rules re-derive for Rust at cutover. The port
+adopts four bipa practices (`~/work/bipa/master/AGENTS.md`, `clippy.toml`) and
+one Beam convention from day one as review law; the syn-based checker gates
+rule 1 mechanically:
 
 1. **Match enums exhaustively — spell out every variant, never `_`.** The
    compiler is the reviewer: adding a variant to `BeamStatus` or
@@ -760,6 +761,13 @@ from day one, as review law the syn-based checker will gate:
    a one-off helper that shuffles data between nearby lines is inlined
    (Tiger DX 10 orders reading; it never licenses wrappers that only rename
    an expression).
+5. **Current stable, flat modules.** `rust-toolchain.toml` and
+   `package.rust-version` pin the latest stable Rust (1.98.0 at this
+   decision), with edition 2024. Module roots use `name.rs` and descendants
+   use `name/child.rs`; `mod.rs` is never used. Prefer stable language and
+   standard-library features available at the pin when they remove branches
+   or boilerplate; never require nightly or rewrite clear code only to look
+   new.
 
 What is deliberately NOT adopted: bipa's money-path transaction rules
 (`.agents/rules/`, Diesel disallowed-types) bind to a database beam does

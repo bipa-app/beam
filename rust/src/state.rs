@@ -7,6 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::TargetSpec;
 
+mod lock;
+
+pub use lock::{
+    LockAcquireOptions, LockError, LockIdentity, StagedLock, acquire_lock_file,
+    acquire_operation_lock, acquire_state_lock, publish_staged_lock, release_lock, stage_lock,
+};
+
 /// Handoff lifecycle. `provisioning`, `starting`, and `killing` are
 /// in-flight phases that still own remote resources; only `up` is a
 /// completed live handoff. Terminal states (`down`, `killed`) are monotonic.
