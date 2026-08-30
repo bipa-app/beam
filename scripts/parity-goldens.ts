@@ -37,6 +37,7 @@ import {
 } from "../src/state.ts";
 import type { ToolName } from "../src/session/types.ts";
 import { createWalkBlocks } from "../src/transport/local.ts";
+import { SshTransport, type SshTransportOptions } from "../src/transport/ssh.ts";
 import { ownedDestinationBlocks } from "../src/workspace.ts";
 
 const GOLDENS_DIR = join(import.meta.dir, "..", "parity", "goldens");
@@ -394,6 +395,77 @@ function localTransportGolden() {
     }),
   };
 }
+interface SshPinnedCase {
+  readonly label: string;
+  readonly remoteDir: string;
+  readonly create: boolean;
+  readonly owned?: { readonly root: string; readonly ownerBytes: string };
+}
+
+function sshTransportGolden() {
+  const ownerBytes = "beam-workspace-v1 rec1 0123456789abcdef0123456789abcdef";
+  const pinnedCases: readonly SshPinnedCase[] = [
+    { label: "absoluteCreate", remoteDir: "/srv/beam/workspace", create: true },
+    { label: "tildeRead", remoteDir: "~/beam/ha rd 'quoted'", create: false },
+    {
+      label: "ownedRootRead",
+      remoteDir: "/srv/beam/workspace",
+      create: false,
+      owned: { root: "/srv/beam/workspace", ownerBytes },
+    },
+    {
+      label: "ownedNestedCreate",
+      remoteDir: "~/beam/workspace/.beam/session/gen 'quoted'",
+      create: true,
+      owned: { root: "~/beam/workspace", ownerBytes },
+    },
+  ];
+  const transport = new SshTransport("unused") as unknown as {
+    pinnedRsyncPath(
+      remoteDir: string,
+      create: boolean,
+      owned?: { root: string; ownerBytes: string },
+    ): string;
+  };
+  const pinnedRsyncPath = pinnedCases.map((entry) => {
+    const output = transport.pinnedRsyncPath(entry.remoteDir, entry.create, entry.owned);
+    return { ...entry, output };
+  });
+  const interactiveInputs: {
+    label: string;
+    host: string;
+    options: SshTransportOptions;
+    command: string;
+  }[] = [
+    { label: "default", host: "user@sandbox.example", options: {}, command: "true" },
+    {
+      label: "providerOptions",
+      host: "root@203.0.113.10",
+      options: {
+        label: "box box_123",
+        rsyncFlags: ["-a"],
+        sshOptions: ["-i", "/tmp/key with space", "-o", "HostKeyAlias=box_123"],
+      },
+      command: "printf %s \"$HOME/it's\"",
+    },
+  ];
+  const interactiveArgv = interactiveInputs.map(({ label, host, options, command }) => {
+    const candidate = new SshTransport(host, options);
+    return { label, host, options, command, transportLabel: candidate.label,
+      output: candidate.interactiveArgv(command),
+    };
+  });
+  const errors = ["", "-oProxyCommand=touch owned"].map((host) => {
+    try {
+      new SshTransport(host);
+      return { host, error: "" };
+    } catch (error) {
+      return { host, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  return { interactiveArgv, pinnedRsyncPath, errors };
+}
+
 
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes("--check");
@@ -404,6 +476,7 @@ async function main(): Promise<void> {
     ["cli-output.json", serialize(await cliOutputGolden())],
     ["state.json", serialize(stateGolden())],
     ["local-transport.json", serialize(localTransportGolden())],
+    ["ssh-transport.json", serialize(sshTransportGolden())],
   ]);
   let drifted = false;
   for (const [name, rendered] of goldens) {
