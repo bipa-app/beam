@@ -13,6 +13,7 @@ hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "time"] }
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit", "parsing", "printing", "proc-macro"] }
