@@ -33,6 +33,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run style
       - run: bunx tsc --noEmit
+      - name: Parity goldens are fresh
+        run: bun scripts/parity-goldens.ts --check
       - run: bun test
       - name: Compile standalone binary
         run: bun build --compile --minify --outfile=beam src/cli.ts
