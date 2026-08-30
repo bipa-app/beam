@@ -1,0 +1,6 @@
+# Clippy policy for the Rust port, adopted from bipa (~/work/bipa/master/
+# clippy.toml). The TS tests assert against golden literals and fixture paths;
+# `expect` there is the panic equivalent of bun:test assertions, not a
+# production shortcut.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

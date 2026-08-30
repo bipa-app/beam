@@ -729,6 +729,31 @@ tempfile. Growing the list is an architecture decision recorded here.
 `cargo deny` gates advisories, licenses, sources, and bans in CI;
 `Cargo.lock` is committed; `rust/deny.toml`'s license list grows only in the
 PR that adds the dependency needing it.
+**Rust style.** The beam Tiger rules re-derive for Rust at cutover; the port
+adopts four bipa practices (`~/work/bipa/master/AGENTS.md`, `clippy.toml`)
+from day one, as review law the syn-based checker will gate:
+
+1. **Match enums exhaustively — spell out every variant, never `_`.** The
+   compiler is the reviewer: adding a variant to `BeamStatus` or
+   `TargetSpec` fails the build at every decision point, which is exactly
+   the list a port reviewer needs. `==` and `matches!` carry no
+   exhaustiveness guarantee; a comparison that decides something must be a
+   real `match` on that path. Guards never discharge a variant.
+2. **Tests panic with `expect`, not `unwrap`.** `rust/clippy.toml` sets
+   `allow-unwrap-in-tests`/`allow-expect-in-tests`; the parity tests assert
+   against golden literals, so `expect` with the case name is the panic
+   equivalent of a bun:test assertion, not a production shortcut.
+3. **`#[derive(Debug)]` only at a use site.** No reflexive derive on every
+   struct; add it when a test or error path prints the value.
+4. **Shallow over clever.** Fewer branches, fewer locals, fewer helper hops;
+   a one-off helper that shuffles data between nearby lines is inlined
+   (Tiger DX 10 orders reading; it never licenses wrappers that only rename
+   an expression).
+
+What is deliberately NOT adopted: bipa's money-path transaction rules
+(`.agents/rules/`, Diesel disallowed-types) bind to a database beam does
+not have, and its workspace/hook machinery assumes a multi-crate layout.
+The port's allowlist policy stands on its own.
 
 **Concurrency.** One current-thread runtime: no work stealing, no `Send`
 infection, and the single-threaded reasoning the TypeScript code was written
