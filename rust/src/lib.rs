@@ -2,4 +2,8 @@
 // parity/goldens/ (DESIGN.md: Rust port (transition record)). Module paths
 // mirror the TypeScript sources they transliterate.
 
+pub mod cli_output;
+pub mod config;
+pub mod env;
+pub mod state;
 pub mod util;

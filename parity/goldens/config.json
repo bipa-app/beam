@@ -1,0 +1,87 @@
+{
+  "targetRoot": [
+    {
+      "name": "boxDefault",
+      "root": "~/beam"
+    },
+    {
+      "name": "boxFull",
+      "root": "/srv/beam"
+    },
+    {
+      "name": "e2b",
+      "root": "~/beam"
+    },
+    {
+      "name": "e2bFull",
+      "root": "~/x"
+    },
+    {
+      "name": "modal",
+      "root": "~/beam"
+    },
+    {
+      "name": "modalFull",
+      "root": "/r"
+    },
+    {
+      "name": "daytona",
+      "root": "~/beam"
+    },
+    {
+      "name": "daytonaFull",
+      "root": "~/d"
+    },
+    {
+      "name": "ssh",
+      "root": "~/beam"
+    },
+    {
+      "name": "sshFull",
+      "root": "/data"
+    },
+    {
+      "name": "local",
+      "root": "/tmp/local-root"
+    },
+    {
+      "name": "localHome",
+      "root": "/r"
+    },
+    {
+      "name": "agentSandbox",
+      "root": "~/beam"
+    },
+    {
+      "name": "agentSandboxFull",
+      "root": "/data/bipa"
+    }
+  ],
+  "resolve": [
+    {
+      "label": "byName",
+      "name": "box",
+      "specType": "box"
+    },
+    {
+      "label": "default",
+      "name": "ssh",
+      "specType": "ssh"
+    },
+    {
+      "label": "soleTarget",
+      "name": "only",
+      "specType": "local"
+    }
+  ],
+  "resolveErrors": [
+    {
+      "label": "unknownName",
+      "error": "unknown target \"ghost\" (have: box, ssh)"
+    },
+    {
+      "label": "noTargets",
+      "error": "no targets configured — run `beam init` and edit the config"
+    }
+  ]
+}

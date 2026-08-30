@@ -1,0 +1,62 @@
+{
+  "planSessionIdentity": [
+    {
+      "label": "noStored",
+      "plan": {
+        "kind": "adopt"
+      }
+    },
+    {
+      "label": "matchStored",
+      "plan": {
+        "kind": "adopt"
+      }
+    },
+    {
+      "label": "driftRetain",
+      "plan": {
+        "kind": "retain",
+        "tool": "omp",
+        "sessionId": "sess-1"
+      }
+    },
+    {
+      "label": "explicitSwitchResolved",
+      "plan": {
+        "kind": "refuse",
+        "reason": "handoff abc123 already shipped session omp sess-1 — refusing to replace it with pi sess-2: the transcript beam installed remotely would be orphaned. beam down abc123 (or beam kill abc123 --purge) first, or drop --tool/--session to keep the stored session"
+      }
+    },
+    {
+      "label": "explicitClearResolved",
+      "plan": {
+        "kind": "refuse",
+        "reason": "handoff abc123 already shipped session omp sess-1 — --no-session would orphan the transcript beam installed remotely. beam down abc123 (or beam kill abc123 --purge) first"
+      }
+    },
+    {
+      "label": "explicitSwitchUnresolved",
+      "plan": {
+        "kind": "adopt"
+      }
+    }
+  ],
+  "isRemoteCwdResolved": [
+    {
+      "label": "absolutePath",
+      "resolved": true
+    },
+    {
+      "label": "tildeUnresolved",
+      "resolved": false
+    },
+    {
+      "label": "tildeResolvedFlag",
+      "resolved": true
+    },
+    {
+      "label": "absoluteResolvedFalse",
+      "resolved": false
+    }
+  ]
+}

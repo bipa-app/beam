@@ -28,6 +28,14 @@ import { dirname, join } from "node:path";
 
 import { fileSha256, treeManifest, treeSha256 } from "../src/util/digest.ts";
 import { shq, shjoin, shqRemotePath } from "../src/util/shell.ts";
+import { CliError, runJsonCommand } from "../src/cli-output.ts";
+import { resolveTarget, targetRoot, type Config, type TargetSpec } from "../src/config.ts";
+import {
+  isRemoteCwdResolved,
+  planSessionIdentity,
+  type BeamRecord,
+} from "../src/state.ts";
+import type { ToolName } from "../src/session/types.ts";
 
 const GOLDENS_DIR = join(import.meta.dir, "..", "parity", "goldens");
 const FIXTURES_DIR = join(import.meta.dir, "..", "parity", "fixtures");
@@ -173,12 +181,201 @@ function digestGolden() {
 function serialize(golden: unknown): string {
   return JSON.stringify(golden, null, 2) + "\n";
 }
+/** Representative TargetSpec corpus: one per variant, with and without
+ * the optional fields, exercising both the serde shape and targetRoot's
+ * default-vs-override branch. */
+const TARGET_SPECS: Record<string, TargetSpec> = {
+  boxDefault: { type: "box" },
+  boxFull: { type: "box", root: "/srv/beam", machineType: "large", environment: "dev",
+    ttlSeconds: 7200,
+  },
+  e2b: { type: "e2b", template: "beam-ssh" },
+  e2bFull: { type: "e2b", template: "t", user: "agent", timeoutSeconds: 3600, root: "~/x" },
+  modal: { type: "modal" },
+  modalFull: { type: "modal", app: "a", image: "i", timeoutSeconds: 10, root: "/r" },
+  daytona: { type: "daytona" },
+  daytonaFull: { type: "daytona", snapshot: "snap", target: "eu", root: "~/d" },
+  ssh: { type: "ssh", host: "user@example.com" },
+  sshFull: { type: "ssh", host: "h", root: "/data", rsyncFlags: ["-a", "-z", "--delete"] },
+  local: { type: "local", root: "/tmp/local-root" },
+  localHome: { type: "local", root: "/r", home: "/h", rsyncFlags: ["-a"] },
+  agentSandbox: {
+    type: "agent-sandbox",
+    context: "ctx",
+    namespace: "beam-u",
+    template: "beam-coding",
+    kubeconfig: "/k/config",
+  },
+  agentSandboxFull: {
+    type: "agent-sandbox",
+    context: "c",
+    namespace: "n",
+    template: "t",
+    kubeconfig: "/k",
+    container: "sandbox",
+    root: "/data/bipa",
+  },
+};
 
-function main(): void {
+function configGolden() {
+  const targetRootOutputs = Object.entries(TARGET_SPECS).map(([name, spec]) => {
+    return { name, root: targetRoot(spec) };
+  });
+  const multi: Config = {
+    defaultTarget: "ssh",
+    targets: { box: TARGET_SPECS.boxDefault!, ssh: TARGET_SPECS.ssh! },
+  };
+  const single: Config = { targets: { only: TARGET_SPECS.local! } };
+  const resolveCases = [
+    { label: "byName", config: multi, name: "box" },
+    { label: "default", config: multi, name: undefined },
+    { label: "soleTarget", config: single, name: undefined },
+  ].map(({ label, config, name }) => {
+    try {
+      const resolved = resolveTarget(config, name);
+      return { label, name: resolved.name, specType: resolved.spec.type };
+    } catch (error) {
+      return { label, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  const resolveErrors = [
+    { label: "unknownName", config: multi, name: "ghost" },
+    { label: "noTargets", config: { targets: {} }, name: undefined },
+  ].map(({ label, config, name }) => {
+    try {
+      resolveTarget(config, name);
+      return { label, resolved: true };
+    } catch (error) {
+      return { label, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  return { targetRoot: targetRootOutputs, resolve: resolveCases, resolveErrors };
+}
+
+/** Drive runJsonCommand with mock commands and capture the single document
+ * it writes to stdout. Determinism: the mock commands emit fixed messages
+ * and data; the only ambient input runJsonCommand reads is process.exitCode,
+ * which each mock sets explicitly. */
+async function cliOutputGolden() {
+  const documents: { label: string; exitCode: number; document: string }[] = [];
+  const realLog = console.log;
+  async function capture(label: string, runCommand: () => Promise<unknown>): Promise<void> {
+    let document = "";
+    console.log = (...values: unknown[]) => {
+      document += values.map(String).join(" ");
+    };
+    let exitCode: number;
+    try {
+      exitCode = await runJsonCommand("probe", runCommand);
+    } finally {
+      console.log = realLog;
+      process.exitCode = 0;
+    }
+    documents.push({ label, exitCode, document });
+  }
+  await capture("success", async () => {
+    console.log("setup complete");
+    console.warn("careful now");
+    return { answer: 42, nested: { list: [1, 2] } };
+  });
+  await capture("successNullData", async () => undefined);
+  await capture("cliError", async () => {
+    console.error("about to fail");
+    throw new CliError("bad_input", "the thing was wrong", { field: "root" });
+  });
+  await capture("plainError", async () => {
+    throw new Error("boom");
+  });
+  await capture("nonErrorThrow", async () => {
+    // eslint-disable-next-line no-throw-literal
+    throw "string failure";
+  });
+  await capture("nonzeroExitCode", async () => {
+    console.log("last word");
+    process.exitCode = 3;
+    return { ignored: true };
+  });
+  return { documents };
+}
+
+/** Minimal BeamRecord factory: planSessionIdentity and isRemoteCwdResolved
+ * read only id/tool/sessionId/remoteCwd/remoteCwdResolved, so the corpus
+ * fills the rest with fixed placeholders. */
+function record(partial: Partial<BeamRecord>): BeamRecord {
+  return {
+    id: "abc123",
+    target: "ssh",
+    localCwd: "/local/work",
+    remoteCwd: "/remote/work",
+    runtimeSession: "beam-abc123",
+    status: "up",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...partial,
+  };
+}
+
+function stateGolden() {
+  const withSession = record({ tool: "omp", sessionId: "sess-1" });
+  const unresolved = record({
+    tool: "omp",
+    sessionId: "sess-1",
+    remoteCwd: "~/beam/work",
+    remoteCwdResolved: false,
+  });
+  const planCases: {
+    label: string;
+    record: BeamRecord;
+    requested: { tool: ToolName; sessionId: string } | undefined;
+    explicit: boolean;
+  }[] = [
+    { label: "noStored", record: record({}), requested: undefined, explicit: false },
+    {
+      label: "matchStored",
+      record: withSession,
+      requested: { tool: "omp", sessionId: "sess-1" },
+      explicit: true,
+    },
+    { label: "driftRetain", record: withSession, requested: undefined, explicit: false },
+    {
+      label: "explicitSwitchResolved",
+      record: withSession,
+      requested: { tool: "pi", sessionId: "sess-2" },
+      explicit: true,
+    },
+    { label: "explicitClearResolved", record: withSession, requested: undefined, explicit: true },
+    {
+      label: "explicitSwitchUnresolved",
+      record: unresolved,
+      requested: { tool: "pi", sessionId: "sess-2" },
+      explicit: true,
+    },
+  ];
+  const planOutputs = planCases.map(({ label, record: r, requested, explicit }) => {
+    return { label, plan: planSessionIdentity(r, requested, explicit) };
+  });
+  const cwdResolved = [
+    { label: "absolutePath", record: record({ remoteCwd: "/abs" }) },
+    { label: "tildeUnresolved", record: record({ remoteCwd: "~/rel" }) },
+    { label: "tildeResolvedFlag", record: record({ remoteCwd: "~/rel", remoteCwdResolved: true }) },
+    { label: "absoluteResolvedFalse", record: record({
+      remoteCwd: "/abs",
+      remoteCwdResolved: false,
+    }) },
+  ].map(({ label, record: r }) => {
+    return { label, resolved: isRemoteCwdResolved(r) };
+  });
+  return { planSessionIdentity: planOutputs, isRemoteCwdResolved: cwdResolved };
+}
+
+async function main(): Promise<void> {
   const check = process.argv.slice(2).includes("--check");
   const goldens = new Map<string, string>([
     ["shell-quoting.json", serialize(quotingGolden())],
     ["digest.json", serialize(digestGolden())],
+    ["config.json", serialize(configGolden())],
+    ["cli-output.json", serialize(await cliOutputGolden())],
+    ["state.json", serialize(stateGolden())],
   ]);
   let drifted = false;
   for (const [name, rendered] of goldens) {
@@ -207,4 +404,4 @@ function main(): void {
   }
 }
 
-main();
+await main();

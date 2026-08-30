@@ -12,8 +12,8 @@ repository = "https://github.com/bipa-app/beam"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [dev-dependencies]
-serde_json = { version = "1", features = ["preserve_order"] }
 syn = { version = "2", features = ["full", "visit", "parsing", "printing", "proc-macro"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
