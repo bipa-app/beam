@@ -38,6 +38,16 @@ import {
 import type { ToolName } from "../src/session/types.ts";
 import { createWalkBlocks } from "../src/transport/local.ts";
 import { SshTransport, type SshTransportOptions } from "../src/transport/ssh.ts";
+import {
+  KubectlTransport,
+  archiveReceiptScript,
+  markerWalkBlocks,
+  parseArchiveReceipt,
+  pinRemoteDirScript,
+  remotePathSetup,
+  syncMarkerFor,
+  type KubectlCoords,
+} from "../src/transport/kubectl.ts";
 import { ownedDestinationBlocks } from "../src/workspace.ts";
 
 const GOLDENS_DIR = join(import.meta.dir, "..", "parity", "goldens");
@@ -467,6 +477,109 @@ function sshTransportGolden() {
 }
 
 
+const KUBECTL_PATHS = [
+  "~",
+  "~/",
+  "~/beam/../work/",
+  "/srv/beam/workspace",
+  "/srv/beam/workspace/.beam/git/gen-1",
+  "/srv/beam/workspace/.beam",
+  "/ha rd/it's",
+] as const;
+
+function captureString(input: string, operation: () => string) {
+  try {
+    return { input, output: operation() };
+  } catch (error) {
+    return { input, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function kubectlInteractiveGolden() {
+  const inputs: {
+    label: string;
+    coords: KubectlCoords;
+    pod: string;
+    command: string;
+  }[] = [
+    {
+      label: "defaultKubeconfig",
+      coords: { context: "sandbox", namespace: "beam-user", container: "sandbox" },
+      pod: "beam-abc",
+      command: "printf %s \"$HOME/it's\"",
+    },
+    {
+      label: "explicitKubeconfig",
+      coords: {
+        context: "ctx",
+        namespace: "ns",
+        container: "agent",
+        kubeconfig: "/tmp/kube config",
+      },
+      pod: "pod-1",
+      command: "true",
+    },
+  ];
+  return inputs.map(({ label, coords, pod, command }) => {
+    const transport = new KubectlTransport(coords, pod);
+    return {
+      label,
+      coords,
+      pod,
+      command,
+      transportLabel: transport.label,
+      output: transport.interactiveArgv(command),
+    };
+  });
+}
+
+function kubectlReceiptGolden() {
+  return [
+    `${"a".repeat(64)} 0`,
+    `  ${"b".repeat(64)}\t42\n`,
+    `${"c".repeat(64)} 9007199254740992`,
+    "not-a-receipt",
+  ].map((input) => {
+    try {
+      return { input, output: parseArchiveReceipt(input) };
+    } catch (error) {
+      return { input, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+
+function kubectlTransportGolden() {
+  const interactiveArgv = kubectlInteractiveGolden();
+  const pathSetup = [
+    ...KUBECTL_PATHS,
+    "relative/path",
+    "line\nbreak",
+  ].map((input) => captureString(input, () => remotePathSetup(input)));
+  const pinRemoteDir = KUBECTL_PATHS.flatMap((input) => {
+    return [false, true].map((create) => {
+      const captured = captureString(input, () => pinRemoteDirScript(input, create));
+      return { ...captured, create };
+    });
+  });
+  const receipts = kubectlReceiptGolden();
+  return {
+    interactiveArgv,
+    syncMarkerFor: KUBECTL_PATHS.map((input) => {
+      return { input, output: syncMarkerFor(input) };
+    }),
+    pathSetup,
+    pinRemoteDir,
+    markerWalkBlocks: ["create", "probe", "invalidate"].map((mode) => {
+      const typed = mode as "create" | "probe" | "invalidate";
+      return { mode, output: markerWalkBlocks(typed) };
+    }),
+    archiveReceiptScript: ["/tmp/archive.tar.gz", "/tmp/it's archive"].map((input) => {
+      return { input, output: archiveReceiptScript(input) };
+    }),
+    parseArchiveReceipt: receipts,
+  };
+}
+
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes("--check");
   const goldens = new Map<string, string>([
@@ -477,6 +590,7 @@ async function main(): Promise<void> {
     ["state.json", serialize(stateGolden())],
     ["local-transport.json", serialize(localTransportGolden())],
     ["ssh-transport.json", serialize(sshTransportGolden())],
+    ["kubectl-transport.json", serialize(kubectlTransportGolden())],
   ]);
   let drifted = false;
   for (const [name, rendered] of goldens) {

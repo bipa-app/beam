@@ -48,7 +48,7 @@ const SYNC_ARCHIVE_ATTEMPTS_MAX = 6;
 const SYNC_DOWN_ARCHIVE_BYTES_MAX = 128 * 1024 * 1024 * 1024;
 
 /** The `<sha256> <bytes>` receipt both verified transfer directions parse. */
-function parseArchiveReceipt(receipt: string): { digest: string; bytes: number } {
+export function parseArchiveReceipt(receipt: string): { digest: string; bytes: number } {
   const match = /^([0-9a-f]{64})\s+([0-9]+)$/.exec(receipt.trim());
   if (match === null) {
     throw new Error(`remote sync archive returned an invalid receipt: ${receipt.trim()}`);
@@ -61,7 +61,7 @@ function parseArchiveReceipt(receipt: string): { digest: string; bytes: number }
 }
 
 /** Shell fragment printing the `<sha256> <bytes>` receipt of one remote file. */
-function archiveReceiptScript(remoteArchive: string): string {
+export function archiveReceiptScript(remoteArchive: string): string {
   return (
     `printf '%s %s\\n' "$(sha256sum ${shq(remoteArchive)} | cut -d ' ' -f1)" ` +
     `"$(/usr/bin/wc -c < ${shq(remoteArchive)})"`
@@ -118,7 +118,7 @@ export function syncMarkerFor(remoteDir: string): SyncMarker {
 }
 
 /** Resolve a remote path to the exact physical pathname every sync shell must prove. */
-function remotePathSetup(remoteDir: string): string {
+export function remotePathSetup(remoteDir: string): string {
   if (remoteDir.includes("\0") || remoteDir.includes("\n") || remoteDir.includes("\r")) {
     throw new Error(
       `beam: remote sync path is not a single pathname: ${JSON.stringify(remoteDir)}`,
@@ -143,7 +143,7 @@ function remotePathSetup(remoteDir: string): string {
  * later transfer action uses `.` only, so an agent swapping any pathname
  * component cannot redirect find/tar after this proof.
  */
-function pinRemoteDirScript(remoteDir: string, create: boolean): string {
+export function pinRemoteDirScript(remoteDir: string, create: boolean): string {
   const setup = remotePathSetup(remoteDir);
   const refuseLink =
     `echo ${shq(`beam: refusing to sync through symlinked path: ${remoteDir}`)} >&2; exit 61`;

@@ -1,0 +1,306 @@
+{
+  "interactiveArgv": [
+    {
+      "label": "defaultKubeconfig",
+      "coords": {
+        "context": "sandbox",
+        "namespace": "beam-user",
+        "container": "sandbox"
+      },
+      "pod": "beam-abc",
+      "command": "printf %s \"$HOME/it's\"",
+      "transportLabel": "k8s beam-user/beam-abc",
+      "output": [
+        "kubectl",
+        "--context",
+        "sandbox",
+        "--namespace",
+        "beam-user",
+        "exec",
+        "-it",
+        "beam-abc",
+        "-c",
+        "sandbox",
+        "--",
+        "bash",
+        "-c",
+        "printf %s \"$HOME/it's\""
+      ]
+    },
+    {
+      "label": "explicitKubeconfig",
+      "coords": {
+        "context": "ctx",
+        "namespace": "ns",
+        "container": "agent",
+        "kubeconfig": "/tmp/kube config"
+      },
+      "pod": "pod-1",
+      "command": "true",
+      "transportLabel": "k8s ns/pod-1",
+      "output": [
+        "kubectl",
+        "--context",
+        "ctx",
+        "--namespace",
+        "ns",
+        "--kubeconfig",
+        "/tmp/kube config",
+        "exec",
+        "-it",
+        "pod-1",
+        "-c",
+        "agent",
+        "--",
+        "bash",
+        "-c",
+        "true"
+      ]
+    }
+  ],
+  "syncMarkerFor": [
+    {
+      "input": "~",
+      "output": {
+        "dest": "~",
+        "root": "~",
+        "rel": ".beam/transport/kubectl-synced/7ace431cb61584cb9b8dc7ec08cf38ac.v1",
+        "file": "7ace431cb61584cb9b8dc7ec08cf38ac.v1",
+        "content": "beam kubectl sync v1 ~"
+      }
+    },
+    {
+      "input": "~/",
+      "output": {
+        "dest": "~/",
+        "root": "~/",
+        "rel": ".beam/transport/kubectl-synced/05292b25783aaf4e4f66300d2a83cc80.v1",
+        "file": "05292b25783aaf4e4f66300d2a83cc80.v1",
+        "content": "beam kubectl sync v1 ~/"
+      }
+    },
+    {
+      "input": "~/beam/../work/",
+      "output": {
+        "dest": "~/work/",
+        "root": "~/work/",
+        "rel": ".beam/transport/kubectl-synced/75c4cae3ea23ed8b804c43a2631c1ee2.v1",
+        "file": "75c4cae3ea23ed8b804c43a2631c1ee2.v1",
+        "content": "beam kubectl sync v1 ~/work/"
+      }
+    },
+    {
+      "input": "/srv/beam/workspace",
+      "output": {
+        "dest": "/srv/beam/workspace",
+        "root": "/srv/beam/workspace",
+        "rel": ".beam/transport/kubectl-synced/0f7dc7e1ad48d141ac5dae9c6d256d90.v1",
+        "file": "0f7dc7e1ad48d141ac5dae9c6d256d90.v1",
+        "content": "beam kubectl sync v1 /srv/beam/workspace"
+      }
+    },
+    {
+      "input": "/srv/beam/workspace/.beam/git/gen-1",
+      "output": {
+        "dest": "/srv/beam/workspace/.beam/git/gen-1",
+        "root": "/srv/beam/workspace",
+        "rel": ".beam/transport/kubectl-synced/5aa556df6153b6d3f4f92038baa0783a.v1",
+        "file": "5aa556df6153b6d3f4f92038baa0783a.v1",
+        "content": "beam kubectl sync v1 /srv/beam/workspace/.beam/git/gen-1"
+      }
+    },
+    {
+      "input": "/srv/beam/workspace/.beam",
+      "output": {
+        "dest": "/srv/beam/workspace/.beam",
+        "root": "/srv/beam/workspace",
+        "rel": ".beam/transport/kubectl-synced/24d1aa7188591bc7f7c1d452c84276fa.v1",
+        "file": "24d1aa7188591bc7f7c1d452c84276fa.v1",
+        "content": "beam kubectl sync v1 /srv/beam/workspace/.beam"
+      }
+    },
+    {
+      "input": "/ha rd/it's",
+      "output": {
+        "dest": "/ha rd/it's",
+        "root": "/ha rd/it's",
+        "rel": ".beam/transport/kubectl-synced/aead85c25be3d52e78d8c41357647ce5.v1",
+        "file": "aead85c25be3d52e78d8c41357647ce5.v1",
+        "content": "beam kubectl sync v1 /ha rd/it's"
+      }
+    }
+  ],
+  "pathSetup": [
+    {
+      "input": "~",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"''"
+    },
+    {
+      "input": "~/",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"'/'"
+    },
+    {
+      "input": "~/beam/../work/",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"'/work/'"
+    },
+    {
+      "input": "/srv/beam/workspace",
+      "output": "__beam_expected='/srv/beam/workspace'"
+    },
+    {
+      "input": "/srv/beam/workspace/.beam/git/gen-1",
+      "output": "__beam_expected='/srv/beam/workspace/.beam/git/gen-1'"
+    },
+    {
+      "input": "/srv/beam/workspace/.beam",
+      "output": "__beam_expected='/srv/beam/workspace/.beam'"
+    },
+    {
+      "input": "/ha rd/it's",
+      "output": "__beam_expected='/ha rd/it'\\''s'"
+    },
+    {
+      "input": "relative/path",
+      "error": "beam: remote sync path must be absolute or home-relative: relative/path"
+    },
+    {
+      "input": "line\nbreak",
+      "error": "beam: remote sync path is not a single pathname: \"line\\nbreak\""
+    }
+  ],
+  "pinRemoteDir": [
+    {
+      "input": "~",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"''\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: ~' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "~",
+      "error": "beam: refusing to use remote sync root: ~",
+      "create": true
+    },
+    {
+      "input": "~/",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"'/'\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: ~/' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "~/",
+      "error": "beam: refusing to use remote sync root: ~/",
+      "create": true
+    },
+    {
+      "input": "~/beam/../work/",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"'/work/'\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: ~/beam/../work/' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "~/beam/../work/",
+      "output": "__beam_home=$(cd -P -- \"$HOME\" 2>/dev/null && /bin/pwd -P) || { echo 'beam: cannot pin remote HOME' >&2; exit 65; }\n__beam_expected=\"$__beam_home\"'/work/'\ncd -P -- \"$__beam_home\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; }\n__beam_prefix=\"$__beam_home\"\nif [ -L 'work' ]; then echo 'beam: refusing to sync through symlinked path: ~/beam/../work/' >&2; exit 61; fi\nif [ ! -e 'work' ]; then mkdir -- 'work' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; }; fi\nif [ -L 'work' ] || [ ! -d 'work' ]; then echo 'beam: refusing to sync through symlinked path: ~/beam/../work/' >&2; exit 61; fi\ncd -P -- 'work' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'work'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: ~/beam/../work/' >&2; exit 66; fi",
+      "create": true
+    },
+    {
+      "input": "/srv/beam/workspace",
+      "output": "__beam_expected='/srv/beam/workspace'\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "/srv/beam/workspace",
+      "output": "__beam_expected='/srv/beam/workspace'\ncd -P -- / 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\n__beam_prefix=\nif [ -L 'srv' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\nif [ ! -e 'srv' ]; then mkdir -- 'srv' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }; fi\nif [ -L 'srv' ] || [ ! -d 'srv' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\ncd -P -- 'srv' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'srv'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; fi\nif [ -L 'beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\nif [ ! -e 'beam' ]; then mkdir -- 'beam' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }; fi\nif [ -L 'beam' ] || [ ! -d 'beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\ncd -P -- 'beam' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'beam'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; fi\nif [ -L 'workspace' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\nif [ ! -e 'workspace' ]; then mkdir -- 'workspace' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }; fi\nif [ -L 'workspace' ] || [ ! -d 'workspace' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace' >&2; exit 61; fi\ncd -P -- 'workspace' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'workspace'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace' >&2; exit 66; fi",
+      "create": true
+    },
+    {
+      "input": "/srv/beam/workspace/.beam/git/gen-1",
+      "output": "__beam_expected='/srv/beam/workspace/.beam/git/gen-1'\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "/srv/beam/workspace/.beam/git/gen-1",
+      "output": "__beam_expected='/srv/beam/workspace/.beam/git/gen-1'\ncd -P -- / 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\nif [ -L 'srv' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\nif [ ! -e 'srv' ]; then mkdir -- 'srv' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }; fi\nif [ -L 'srv' ] || [ ! -d 'srv' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- 'srv' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'srv'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi\nif [ -L 'beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\nif [ ! -e 'beam' ]; then mkdir -- 'beam' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }; fi\nif [ -L 'beam' ] || [ ! -d 'beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- 'beam' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'beam'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi\nif [ -L 'workspace' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\nif [ ! -e 'workspace' ]; then mkdir -- 'workspace' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }; fi\nif [ -L 'workspace' ] || [ ! -d 'workspace' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- 'workspace' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'workspace'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi\nif [ -L '.beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\nif [ ! -e '.beam' ]; then mkdir -- '.beam' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }; fi\nif [ -L '.beam' ] || [ ! -d '.beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- '.beam' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'.beam'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi\nif [ -L 'git' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\nif [ ! -e 'git' ]; then mkdir -- 'git' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }; fi\nif [ -L 'git' ] || [ ! -d 'git' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- 'git' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'git'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi\nif [ -L 'gen-1' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\nif [ ! -e 'gen-1' ]; then mkdir -- 'gen-1' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }; fi\nif [ -L 'gen-1' ] || [ ! -d 'gen-1' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 61; fi\ncd -P -- 'gen-1' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'gen-1'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam/git/gen-1' >&2; exit 66; fi",
+      "create": true
+    },
+    {
+      "input": "/srv/beam/workspace/.beam",
+      "output": "__beam_expected='/srv/beam/workspace/.beam'\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "/srv/beam/workspace/.beam",
+      "output": "__beam_expected='/srv/beam/workspace/.beam'\ncd -P -- / 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\n__beam_prefix=\nif [ -L 'srv' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\nif [ ! -e 'srv' ]; then mkdir -- 'srv' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }; fi\nif [ -L 'srv' ] || [ ! -d 'srv' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\ncd -P -- 'srv' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'srv'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; fi\nif [ -L 'beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\nif [ ! -e 'beam' ]; then mkdir -- 'beam' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }; fi\nif [ -L 'beam' ] || [ ! -d 'beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\ncd -P -- 'beam' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'beam'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; fi\nif [ -L 'workspace' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\nif [ ! -e 'workspace' ]; then mkdir -- 'workspace' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }; fi\nif [ -L 'workspace' ] || [ ! -d 'workspace' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\ncd -P -- 'workspace' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'workspace'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; fi\nif [ -L '.beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\nif [ ! -e '.beam' ]; then mkdir -- '.beam' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }; fi\nif [ -L '.beam' ] || [ ! -d '.beam' ]; then echo 'beam: refusing to sync through symlinked path: /srv/beam/workspace/.beam' >&2; exit 61; fi\ncd -P -- '.beam' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'.beam'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /srv/beam/workspace/.beam' >&2; exit 66; fi",
+      "create": true
+    },
+    {
+      "input": "/ha rd/it's",
+      "output": "__beam_expected='/ha rd/it'\\''s'\nif [ -L \"$__beam_expected\" ]; then echo 'beam: refusing to sync through symlinked path: /ha rd/it'\\''s' >&2; exit 61; fi\ncd -P -- \"$__beam_expected\" 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_expected\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; fi",
+      "create": false
+    },
+    {
+      "input": "/ha rd/it's",
+      "output": "__beam_expected='/ha rd/it'\\''s'\ncd -P -- / 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\n__beam_prefix=\nif [ -L 'ha rd' ]; then echo 'beam: refusing to sync through symlinked path: /ha rd/it'\\''s' >&2; exit 61; fi\nif [ ! -e 'ha rd' ]; then mkdir -- 'ha rd' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }; fi\nif [ -L 'ha rd' ] || [ ! -d 'ha rd' ]; then echo 'beam: refusing to sync through symlinked path: /ha rd/it'\\''s' >&2; exit 61; fi\ncd -P -- 'ha rd' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'ha rd'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; fi\nif [ -L 'it'\\''s' ]; then echo 'beam: refusing to sync through symlinked path: /ha rd/it'\\''s' >&2; exit 61; fi\nif [ ! -e 'it'\\''s' ]; then mkdir -- 'it'\\''s' || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }; fi\nif [ -L 'it'\\''s' ] || [ ! -d 'it'\\''s' ]; then echo 'beam: refusing to sync through symlinked path: /ha rd/it'\\''s' >&2; exit 61; fi\ncd -P -- 'it'\\''s' 2>/dev/null || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\n__beam_prefix=\"$__beam_prefix\"/'it'\\''s'\n__beam_actual=$(/bin/pwd -P) || { echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; }\nif [ \"$__beam_actual\" != \"$__beam_prefix\" ]; then echo 'beam: remote sync path no longer resolves to its pinned physical directory: /ha rd/it'\\''s' >&2; exit 66; fi",
+      "create": true
+    }
+  ],
+  "markerWalkBlocks": [
+    {
+      "mode": "create",
+      "output": [
+        "__beam_mprefix=$(/bin/pwd -P) || exit 66",
+        "if [ -L '.beam' ]; then echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e '.beam' ]; then mkdir -- '.beam' || { echo 'beam: cannot create .beam' >&2; exit 63; }; __beam_mk_new=1; fi\nif [ -L '.beam' ] || [ ! -d '.beam' ]; then echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- '.beam' 2>/dev/null || { echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'.beam'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: .beam no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi\nif [ \"$__beam_mk_new\" = 1 ]; then chmod 700 . || { echo 'beam: cannot set the mode of .beam' >&2; exit 63; }; [ -n \"$(find . -prune -perm 700)\" ] || { echo 'beam: the mode of .beam did not verify' >&2; exit 63; }; fi",
+        "if [ -L 'transport' ]; then echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e 'transport' ]; then mkdir -- 'transport' || { echo 'beam: cannot create transport' >&2; exit 63; }; __beam_mk_new=1; fi\nif [ -L 'transport' ] || [ ! -d 'transport' ]; then echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- 'transport' 2>/dev/null || { echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'transport'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: transport no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi\nif [ \"$__beam_mk_new\" = 1 ]; then chmod 700 . || { echo 'beam: cannot set the mode of transport' >&2; exit 63; }; [ -n \"$(find . -prune -perm 700)\" ] || { echo 'beam: the mode of transport did not verify' >&2; exit 63; }; fi",
+        "if [ -L 'kubectl-synced' ]; then echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e 'kubectl-synced' ]; then mkdir -- 'kubectl-synced' || { echo 'beam: cannot create kubectl-synced' >&2; exit 63; }; __beam_mk_new=1; fi\nif [ -L 'kubectl-synced' ] || [ ! -d 'kubectl-synced' ]; then echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- 'kubectl-synced' 2>/dev/null || { echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'kubectl-synced'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: kubectl-synced no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi\nif [ \"$__beam_mk_new\" = 1 ]; then chmod 700 . || { echo 'beam: cannot set the mode of kubectl-synced' >&2; exit 63; }; [ -n \"$(find . -prune -perm 700)\" ] || { echo 'beam: the mode of kubectl-synced did not verify' >&2; exit 63; }; fi"
+      ]
+    },
+    {
+      "mode": "probe",
+      "output": [
+        "__beam_mprefix=$(/bin/pwd -P) || exit 66",
+        "if [ -L '.beam' ]; then echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e '.beam' ]; then exit 61; fi\nif [ -L '.beam' ] || [ ! -d '.beam' ]; then echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- '.beam' 2>/dev/null || { echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'.beam'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: .beam no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi",
+        "if [ -L 'transport' ]; then echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e 'transport' ]; then exit 61; fi\nif [ -L 'transport' ] || [ ! -d 'transport' ]; then echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- 'transport' 2>/dev/null || { echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'transport'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: transport no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi",
+        "if [ -L 'kubectl-synced' ]; then echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e 'kubectl-synced' ]; then exit 61; fi\nif [ -L 'kubectl-synced' ] || [ ! -d 'kubectl-synced' ]; then echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- 'kubectl-synced' 2>/dev/null || { echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'kubectl-synced'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: kubectl-synced no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi"
+      ]
+    },
+    {
+      "mode": "invalidate",
+      "output": [
+        "__beam_mprefix=$(/bin/pwd -P) || exit 66",
+        "if [ -L '.beam' ]; then echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e '.beam' ]; then exit 0; fi\nif [ -L '.beam' ] || [ ! -d '.beam' ]; then echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- '.beam' 2>/dev/null || { echo 'beam: .beam is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'.beam'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: .beam no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi",
+        "if [ -L 'transport' ]; then echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e 'transport' ]; then exit 0; fi\nif [ -L 'transport' ] || [ ! -d 'transport' ]; then echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- 'transport' 2>/dev/null || { echo 'beam: transport is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'transport'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: transport no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi",
+        "if [ -L 'kubectl-synced' ]; then echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\n__beam_mk_new=0\nif [ ! -e 'kubectl-synced' ]; then exit 0; fi\nif [ -L 'kubectl-synced' ] || [ ! -d 'kubectl-synced' ]; then echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; fi\ncd -P -- 'kubectl-synced' 2>/dev/null || { echo 'beam: kubectl-synced is a symlink — refusing to touch transport metadata through it' >&2; exit 62; }\n__beam_mprefix=\"$__beam_mprefix\"/'kubectl-synced'\nif [ \"$(/bin/pwd -P)\" != \"$__beam_mprefix\" ]; then echo 'beam: kubectl-synced no longer resolves inside its workspace — refusing to touch transport metadata' >&2; exit 66; fi"
+      ]
+    }
+  ],
+  "archiveReceiptScript": [
+    {
+      "input": "/tmp/archive.tar.gz",
+      "output": "printf '%s %s\\n' \"$(sha256sum '/tmp/archive.tar.gz' | cut -d ' ' -f1)\" \"$(/usr/bin/wc -c < '/tmp/archive.tar.gz')\""
+    },
+    {
+      "input": "/tmp/it's archive",
+      "output": "printf '%s %s\\n' \"$(sha256sum '/tmp/it'\\''s archive' | cut -d ' ' -f1)\" \"$(/usr/bin/wc -c < '/tmp/it'\\''s archive')\""
+    }
+  ],
+  "parseArchiveReceipt": [
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 0",
+      "output": {
+        "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bytes": 0
+      }
+    },
+    {
+      "input": "  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\t42\n",
+      "output": {
+        "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bytes": 42
+      }
+    },
+    {
+      "input": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc 9007199254740992",
+      "error": "remote sync archive size is invalid: 9007199254740992 bytes"
+    },
+    {
+      "input": "not-a-receipt",
+      "error": "remote sync archive returned an invalid receipt: not-a-receipt"
+    }
+  ]
+}

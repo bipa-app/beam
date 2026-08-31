@@ -12,6 +12,7 @@ use std::pin::Pin;
 
 use crate::util::shell::{RunError, RunResult};
 
+pub mod kubectl;
 pub mod local;
 pub mod ssh;
 
