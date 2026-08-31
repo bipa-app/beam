@@ -6,10 +6,28 @@
 
 use std::fmt::{Display, Formatter};
 
-use crate::util::shell::shq;
+use crate::util::shell::{shq, shq_remote_path};
 
 pub const BEAM_RESERVED_DIR: &str = ".beam";
 pub const BEAM_OWNER_FILE: &str = "owner";
+
+pub fn enter_workspace_script(remote_cwd: &str) -> String {
+    let expected = shq_remote_path(remote_cwd);
+    [
+        format!(
+            "cd -P -- {expected} || {{ echo {} >&2; exit 62; }}",
+            shq(&format!("beam: cannot enter workspace {remote_cwd}"))
+        ),
+        "__beam_actual=$(/bin/pwd -P)".to_owned(),
+        format!(
+            "if [ \"$__beam_actual\" != {expected} ]; then echo {} >&2; exit 62; fi",
+            shq(&format!(
+                "beam: workspace path no longer resolves to {remote_cwd}"
+            ))
+        ),
+    ]
+    .join("\n")
+}
 
 pub fn owner_guard_script(owner: &str) -> String {
     let refuse =

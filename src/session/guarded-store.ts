@@ -142,6 +142,67 @@ function installPublishScript(options: {
   ].join("\n");
 }
 
+function installPrepareScript(dirs: string[]): string {
+  return [...enterHome(), ...descend(dirs, true)].join("\n");
+}
+
+function installResidueScript(dirs: string[], tmpQ: string, handleQ: string): string {
+  return [
+    ...enterHome(),
+    ...descend(dirs, false, true),
+    ...installResidueLines(tmpQ, handleQ),
+  ].join("\n");
+}
+
+function collectProbeScript(dirs: string[], fileQ: string): string {
+  const missing = shq("beam: remote harness transcript is missing or unsafe");
+  return [
+    ...enterHome(),
+    ...descend(dirs, false),
+    `if [ -L ${fileQ} ] || [ ! -f ${fileQ} ]; then echo ${missing} >&2; exit 66; fi`,
+    `ls -lni -- ${fileQ} || exit 66`,
+  ].join("\n");
+}
+
+function cleanupScript(dirs: string[], fileQ: string, removeLeafDirectory: boolean): string {
+  const refuseDir = shq("beam: refusing to remove a directory as a transcript");
+  return [
+    ...enterHome(),
+    ...descend(dirs, false, true),
+    `if [ -d ${fileQ} ] && [ ! -L ${fileQ} ]; then echo ${refuseDir} >&2; exit 66; fi`,
+    `rm -f -- ${fileQ} || exit 67`,
+    ...(removeLeafDirectory && dirs.length > 0
+      ? ["cd -P -- .. || exit 68", `rmdir -- ${shq(dirs.at(-1)!)} 2>/dev/null || true`]
+      : []),
+  ].join("\n");
+}
+
+/** Fixed generated-script corpus consumed by the side-by-side Rust port. */
+export function guardedStoreScriptGolden() {
+  const dirs = [".claude", "projects", "-tmp-work"];
+  const fileQ = shq("session 'x'.jsonl");
+  const tmpQ = shq(".beam-install-fixed");
+  const handleQ = shq(".beam-install-fixed.h");
+  return [
+    { label: "install-prepare", output: installPrepareScript(dirs) },
+    {
+      label: "install-publish",
+      output: installPublishScript({
+        dirs,
+        tmpQ,
+        handleQ,
+        fileQ,
+        expectedSha256: "a".repeat(64),
+        dest: "~/.claude/projects/-tmp-work/session 'x'.jsonl",
+      }),
+    },
+    { label: "install-residue", output: installResidueScript(dirs, tmpQ, handleQ) },
+    { label: "collect-probe", output: collectProbeScript(dirs, fileQ) },
+    { label: "cleanup-file", output: cleanupScript(dirs, fileQ, false) },
+    { label: "cleanup-leaf", output: cleanupScript(dirs, fileQ, true) },
+  ];
+}
+
 /**
  * Install one local transcript without following any agent-controlled store
  * path, and without ever re-walking a textual absolute path.
@@ -179,7 +240,7 @@ export async function installGuardedHomeFile(
     // Hold (and create, privately) the destination parent BEFORE the upload
     // so the temp lands inside it — never at a home-level path that a later
     // shell would have to re-walk textually.
-    await t.execChecked([...enterHome(), ...descend(dirs, true)].join("\n"));
+    await t.execChecked(installPrepareScript(dirs));
     await t.syncUp(localStage, `~/${dirs.join("/")}/${tmp}`, { checksum: true });
     const script = installPublishScript({
       dirs,
@@ -193,8 +254,7 @@ export async function installGuardedHomeFile(
   } catch (error) {
     // Best-effort removal of exactly our residue names; the store chain and
     // any published transcript stay untouched.
-    const residue = installResidueLines(tmpQ, handleQ);
-    await t.exec([...enterHome(), ...descend(dirs, false, true), ...residue].join("\n"));
+    await t.exec(installResidueScript(dirs, tmpQ, handleQ));
     throw error;
   } finally {
     rmSync(localStage, { recursive: true, force: true });
@@ -218,13 +278,7 @@ export async function collectGuardedHomeFile(
   const dirs = segments.slice(0, -1);
   const file = segments.at(-1)!;
   const fileQ = shq(file);
-  const missing = shq("beam: remote harness transcript is missing or unsafe");
-  const probe = [
-    ...enterHome(),
-    ...descend(dirs, false),
-    `if [ -L ${fileQ} ] || [ ! -f ${fileQ} ]; then echo ${missing} >&2; exit 66; fi`,
-    `ls -lni -- ${fileQ} || exit 66`,
-  ].join("\n");
+  const probe = collectProbeScript(dirs, fileQ);
   const localStage = mkdtempSync(join(tmpdir(), "beam-harness-return-"));
   try {
     const pre = await t.execChecked(probe);
@@ -267,15 +321,5 @@ export async function cleanupGuardedHomeFile(
   const dirs = segments.slice(0, -1);
   const file = segments.at(-1)!;
   const fileQ = shq(file);
-  const refuseDir = shq("beam: refusing to remove a directory as a transcript");
-  const script = [
-    ...enterHome(),
-    ...descend(dirs, false, true),
-    `if [ -d ${fileQ} ] && [ ! -L ${fileQ} ]; then echo ${refuseDir} >&2; exit 66; fi`,
-    `rm -f -- ${fileQ} || exit 67`,
-    ...(removeLeafDirectory && dirs.length > 0
-      ? ["cd -P -- .. || exit 68", `rmdir -- ${shq(dirs.at(-1)!)} 2>/dev/null || true`]
-      : []),
-  ].join("\n");
-  await t.execChecked(script);
+  await t.execChecked(cleanupScript(dirs, fileQ, removeLeafDirectory));
 }

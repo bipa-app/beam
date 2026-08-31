@@ -36,6 +36,17 @@ import {
   type BeamRecord,
 } from "../src/state.ts";
 import type { ToolName } from "../src/session/types.ts";
+import { ADAPTERS } from "../src/session/index.ts";
+import { claudeProjectSlug } from "../src/session/claude.ts";
+import { guardedStoreScriptGolden } from "../src/session/guarded-store.ts";
+import {
+  piFamilyInstallScriptGolden,
+  rewriteSessionHeaderCwd,
+} from "../src/session/pi-family.ts";
+import {
+  sessionInstallKey,
+  type SessionShipBundle,
+} from "../src/session/ship-bundle.ts";
 import { createWalkBlocks } from "../src/transport/local.ts";
 import { SshTransport, type SshTransportOptions } from "../src/transport/ssh.ts";
 import {
@@ -580,6 +591,86 @@ function kubectlTransportGolden() {
   };
 }
 
+function sessionHeaderRewriteGolden() {
+  return [
+    {
+      input:
+        '{"type":"title","v":1,"title":"t"}\n' +
+        '{"type":"session","version":3,"id":"abc","timestamp":"2026-01-01","cwd":"/old"}\n' +
+        '{"type":"message","id":"m1"}\n',
+      cwd: "/remote/work space",
+    },
+    {
+      input: '{"type":"session","id":"abc","cwd":"/old","extra":{"z":1}}\n',
+      cwd: "/new",
+    },
+    {
+      input:
+        Array.from({ length: 20 }, (_, index) => {
+          return `{"type":"message","id":"before-${index}"}\n`;
+        }).join("") +
+        '{"type":"session","id":"abc","cwd":"/old"}\n' +
+        '{"type":"message","id":"after"}\n',
+      cwd: "/after-twenty",
+    },
+    {
+      input: '{"type":"session","id":"abc","cwd":\n',
+      cwd: "/new",
+    },
+    {
+      input: '{"type": "session", "id": "abc", "cwd": "/old"}\n',
+      cwd: "/new",
+    },
+  ].map(({ input, cwd }) => {
+    try {
+      return { input, cwd, output: rewriteSessionHeaderCwd(input, cwd) };
+    } catch (error) {
+      return { input, cwd, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+
+function sessionAdapterGolden() {
+  const slugs = [
+    "/Users/example/work/a.b_c",
+    "/tmp/space here/.config",
+    "/",
+  ].map((input) => {
+    return { input, output: claudeProjectSlug(input) };
+  });
+  const rewrites = sessionHeaderRewriteGolden();
+  const bundles: SessionShipBundle[] = [
+    {
+      tool: "omp",
+      id: "abc-123",
+      transcriptSha256: "0".repeat(64),
+    },
+    {
+      tool: "pi",
+      id: "session with spaces",
+      transcriptSha256: "a".repeat(64),
+      artifactsSha256: "b".repeat(64),
+    },
+  ];
+  return {
+    adapters: ADAPTERS.map((adapter) => {
+      return {
+        tool: adapter.tool,
+        binary: adapter.binary,
+        loginArgv: adapter.loginArgv,
+        remoteAuthProbe: adapter.remoteAuthProbe ?? null,
+      };
+    }),
+    slugs,
+    rewrites,
+    installKeys: bundles.map((bundle) => {
+      return { bundle, output: sessionInstallKey(bundle) };
+    }),
+    guardedStoreScripts: guardedStoreScriptGolden(),
+    piFamilyInstallScripts: piFamilyInstallScriptGolden(),
+  };
+}
+
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes("--check");
   const goldens = new Map<string, string>([
@@ -591,6 +682,7 @@ async function main(): Promise<void> {
     ["local-transport.json", serialize(localTransportGolden())],
     ["ssh-transport.json", serialize(sshTransportGolden())],
     ["kubectl-transport.json", serialize(kubectlTransportGolden())],
+    ["session-adapters.json", serialize(sessionAdapterGolden())],
   ]);
   let drifted = false;
   for (const [name, rendered] of goldens) {
