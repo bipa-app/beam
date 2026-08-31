@@ -663,6 +663,77 @@ function installModeOctal(mode: number): string {
   return (mode & 0o7777).toString(8);
 }
 
+function installCommitScript(options: {
+  spec: PiFamilySpec;
+  remoteCwd: string;
+  owner: string | undefined;
+  phase: InstallCommitOptions;
+}): string {
+  const { spec, remoteCwd, owner, phase } = options;
+  return [
+    "set -u",
+    enterWorkspaceScript(remoteCwd),
+    ...(owner !== undefined ? [ownerGuardScript(owner)] : []),
+    ...installGuardScript(phase),
+    ...(spec.privateSessionDir
+      ? installPrivateDirScript({
+          privateSessionDir: spec.privateSessionDir,
+          workspaceSession: phase.workspaceSession,
+          artifactsDest: phase.artifactsDest,
+        })
+      : []),
+    ...installVerifyPhaseScript(phase),
+    ...installPublishPhaseScript(phase),
+  ].join("\n");
+}
+
+/** Fixed generated-script corpus consumed by the side-by-side Rust port. */
+export function piFamilyInstallScriptGolden() {
+  const remoteCwd = "/srv/beam/work space";
+  const key = "key-123";
+  const manifest: TreeManifestEntry[] = [
+    { path: "latest", kind: "link", target: "nested/blob 'one'" },
+    { path: "nested", kind: "dir", mode: 0o700 },
+    { path: "nested/blob 'one'", kind: "file", mode: 0o600 },
+  ];
+  return [
+    {
+      label: "omp-no-artifacts",
+      output: installCommitScript({
+        spec: OMP_SPEC,
+        remoteCwd,
+        owner: undefined,
+        phase: {
+          workspaceSession: OMP_SPEC.workspaceSession,
+          artifactsDest: OMP_SPEC.workspaceSession.slice(0, -".jsonl".length),
+          stageParent: ".beam/session-install",
+          stageName: `.beam/session-install/${key}`,
+          key,
+          manifest: [],
+          hasArtifacts: false,
+        },
+      }),
+    },
+    {
+      label: "pi-artifact-tree-owner",
+      output: installCommitScript({
+        spec: PI_SPEC,
+        remoteCwd,
+        owner: "owner-'x",
+        phase: {
+          workspaceSession: PI_SPEC.workspaceSession,
+          artifactsDest: PI_SPEC.workspaceSession.slice(0, -".jsonl".length),
+          stageParent: ".beam/session-install",
+          stageName: `.beam/session-install/${key}`,
+          key,
+          manifest,
+          hasArtifacts: true,
+        },
+      }),
+    },
+  ];
+}
+
 export class PiFamilyAdapter implements SessionAdapter {
   readonly tool: ToolName;
   readonly binary: string;
@@ -767,21 +838,7 @@ export class PiFamilyAdapter implements SessionAdapter {
         manifest: session.artifactsDir ? treeManifest(session.artifactsDir) : [],
         hasArtifacts: Boolean(session.artifactsDir),
       };
-      const commit = [
-        "set -u",
-        enterWorkspaceScript(remoteCwd),
-        ...(owner !== undefined ? [ownerGuardScript(owner)] : []),
-        ...installGuardScript(phase),
-        ...(this.spec.privateSessionDir
-          ? installPrivateDirScript({
-              privateSessionDir: this.spec.privateSessionDir,
-              workspaceSession: this.spec.workspaceSession,
-              artifactsDest,
-            })
-          : []),
-        ...installVerifyPhaseScript(phase),
-        ...installPublishPhaseScript(phase),
-      ].join("\n");
+      const commit = installCommitScript({ spec: this.spec, remoteCwd, owner, phase });
       await t.execChecked(commit);
     } catch (err) {
       // Keep the stage: it is deterministic, beam-reserved, and excluded

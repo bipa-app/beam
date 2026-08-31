@@ -816,6 +816,18 @@ bespoke rules), release assets built by cargo for the same four targets, all
 live handoffs drained, then the PATH flip and TypeScript deletion in one
 change.
 
+**Current port boundary.** The Rust crate now reaches through all four session
+adapters: OMP and Pi use the owner-bound, deterministic `.beam` install
+transaction and exact artifact tree; Claude Code and Codex use the no-follow
+home-store transaction. Every install and return re-proves transcript identity;
+locators follow each harness's native store identity rules. Every return stays
+under Beam-owned storage, and returned digests hash the fetched raw bytes. The
+TypeScript golden pins adapter metadata, slugs, header rewrites, install keys,
+and generated install/collection/cleanup shells byte-exact. Hermetic
+local-transport tests cover locate, install, conflict refusal, return, cleanup,
+permissions, links, and artifacts. Command orchestration is not yet ported, so
+the TypeScript binary still owns every user-visible flow.
+
 ## Later
 
 - More providers behind `SandboxProvider`: a `gce` provider (start/stop the
