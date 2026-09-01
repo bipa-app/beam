@@ -1,9 +1,9 @@
 //! Goal: prove the Rust Git seam ships linked worktrees and returns remote Git
 //! state without mutating the local checkout or its live refs.
 //!
-//! Method: build real repositories, materialize them, exercise hostile source
-//! changes and operation state, then collect a local-transport return through
-//! the same authenticated quarantine path used by remote transports.
+//! Method: build real repositories, materialize them on a bounded Linux-sized
+//! stack, exercise hostile source changes and operation state, then collect a
+//! local-transport return through the authenticated quarantine path.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -19,6 +19,7 @@ use beam::workspace_git::{
 };
 
 const OWNER_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+const WORKSPACE_GIT_TEST_STACK_BYTES: usize = 1_835_008;
 
 #[tokio::test(flavor = "current_thread")]
 async fn linked_worktree_materialization_preserves_state_and_detects_drift() {
@@ -99,8 +100,27 @@ async fn materialize_error(worktree: &Path) -> beam::workspace_git::WorkspaceGit
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn remote_return_is_append_only_and_leaves_live_checkout_untouched() {
+#[test]
+fn remote_return_is_append_only_and_leaves_live_checkout_untouched() {
+    // Preserve 256 KiB of headroom below Rust's 2 MiB Linux test stack.
+    let thread = std::thread::Builder::new()
+        .name("workspace-git-stack-budget".to_owned())
+        .stack_size(WORKSPACE_GIT_TEST_STACK_BYTES)
+        .spawn(|| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build current-thread runtime");
+            runtime.block_on(remote_return_is_append_only_run());
+        })
+        .expect("spawn bounded-stack workspace test");
+    match thread.join() {
+        Ok(()) => {}
+        Err(error) => std::panic::resume_unwind(error),
+    }
+}
+
+async fn remote_return_is_append_only_run() {
     let fixture = GitFixture::standard().await;
     let local_head = git(&fixture.worktree, &["rev-parse", "HEAD"]).await;
     let materialized = materialize_worktree_git(&fixture.worktree)

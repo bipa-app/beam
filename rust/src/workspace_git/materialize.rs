@@ -84,6 +84,13 @@ impl HeadState {
     }
 }
 
+struct MaterializeSourcePaths {
+    common_dir: PathBuf,
+    worktree_git_dir: PathBuf,
+    common_dir_token: String,
+    worktree_git_dir_token: String,
+}
+
 struct MaterializeSourceSnapshot {
     identity: SourceIdentity,
     common_dir_token: String,
@@ -127,6 +134,55 @@ pub fn materialize_worktree_git(
 async fn materialize_worktree_git_boxed(
     local_cwd: &Path,
 ) -> Result<MaterializedWorktreeGit, WorkspaceGitError> {
+    // Keep subprocess-heavy phases as siblings: nested poll chains overflowed
+    // Rust's 2 MiB Linux test-thread stack in debug builds.
+    materialize_preflight(local_cwd).await?;
+    let source_paths = materialize_source_paths(local_cwd).await?;
+    let fingerprint = source_git_fingerprint(
+        local_cwd,
+        &source_paths.common_dir,
+        &source_paths.worktree_git_dir,
+    )
+    .await?;
+    let snapshot = materialize_source_snapshot(local_cwd, source_paths, fingerprint).await?;
+    let temporary = tempfile::Builder::new().prefix("beam-wtgit-").tempdir()?;
+    let repo_dir = temporary.path().join("repo");
+    let git_dir = repo_dir.join(".git");
+    materialize_clone_payload(local_cwd, temporary.path(), &repo_dir, &git_dir).await?;
+    materialize_mirror_refs(
+        &repo_dir,
+        &snapshot.refs,
+        &snapshot.shipped_stash,
+        &snapshot.head,
+    )
+    .await?;
+    materialize_ship_index(local_cwd, &repo_dir, &git_dir, &snapshot.head).await?;
+    materialize_install_config(
+        &repo_dir,
+        &git_dir,
+        &snapshot.identity.common_dir,
+        &snapshot.config,
+    )
+    .await?;
+    let shipped_refs = materialize_seal_payload(
+        &git_dir,
+        &snapshot.refs,
+        &snapshot.shipped_stash,
+        snapshot.stash_log.as_deref(),
+    )?;
+    materialize_prove_payload_complete(&repo_dir, &snapshot.refs).await?;
+    materialize_assert_source_unchanged(&snapshot.identity, &repo_dir).await?;
+    let (source, ship_info) = materialize_ship_info(snapshot, &shipped_refs)?;
+    Ok(MaterializedWorktreeGit {
+        temporary,
+        repo_dir,
+        git_dir,
+        ship_info,
+        source,
+    })
+}
+
+async fn materialize_preflight(local_cwd: &Path) -> Result<(), WorkspaceGitError> {
     assert_no_sparse_layout(local_cwd, "beam up").await?;
     assert_no_operation_in_progress(local_cwd, "beam up").await?;
     assert_files_ref_storage(local_cwd, "beam up").await?;
@@ -144,81 +200,12 @@ async fn materialize_worktree_git_boxed(
                 .to_owned(),
         ));
     }
-    let temporary = tempfile::Builder::new().prefix("beam-wtgit-").tempdir()?;
-    let repo_dir = temporary.path().join("repo");
-    let git_dir = repo_dir.join(".git");
-    let result =
-        materialize_worktree_git_inner(local_cwd, &repo_dir, &git_dir, temporary.path()).await;
-    match result {
-        Ok((source, ship_info)) => Ok(MaterializedWorktreeGit {
-            temporary,
-            repo_dir,
-            git_dir,
-            ship_info,
-            source,
-        }),
-        Err(error) => {
-            drop(temporary);
-            Err(error)
-        }
-    }
+    Ok(())
 }
 
-async fn materialize_worktree_git_inner(
+async fn materialize_source_paths(
     local_cwd: &Path,
-    repo_dir: &Path,
-    git_dir: &Path,
-    temporary_root: &Path,
-) -> Result<(SourceIdentity, WtGitShipInfo), WorkspaceGitError> {
-    let snapshot = materialize_source_snapshot(local_cwd).await?;
-    materialize_clone_payload(local_cwd, temporary_root, repo_dir, git_dir).await?;
-    materialize_mirror_refs(
-        repo_dir,
-        &snapshot.refs,
-        &snapshot.shipped_stash,
-        &snapshot.head,
-    )
-    .await?;
-    materialize_ship_index(local_cwd, repo_dir, git_dir, &snapshot.head).await?;
-    materialize_install_config(
-        repo_dir,
-        git_dir,
-        &snapshot.identity.common_dir,
-        &snapshot.config,
-    )
-    .await?;
-    let shipped_refs = materialize_seal_payload(
-        git_dir,
-        &snapshot.refs,
-        &snapshot.shipped_stash,
-        snapshot.stash_log.as_deref(),
-    )?;
-    materialize_prove_payload_complete(repo_dir, &snapshot.refs).await?;
-    materialize_assert_source_unchanged(&snapshot.identity, repo_dir).await?;
-    let mut generation_bytes = [0_u8; 8];
-    getrandom::fill(&mut generation_bytes)
-        .map_err(|source| WorkspaceGitError::message(format!("getrandom failed: {source}")))?;
-    let ship_info = WtGitShipInfo {
-        head: snapshot.head.commit().map(str::to_owned),
-        branch: snapshot.head.reference().map(str::to_owned),
-        common_dir: path_text(&snapshot.identity.common_dir)?.to_owned(),
-        worktree_git_dir: Some(path_text(&snapshot.identity.worktree_git_dir)?.to_owned()),
-        common_dir_id: Some(snapshot.identity.fingerprint.common_dir_id.clone()),
-        worktree_git_dir_id: Some(snapshot.identity.fingerprint.worktree_git_dir_id.clone()),
-        common_dir_token: Some(snapshot.common_dir_token),
-        worktree_git_dir_token: Some(snapshot.worktree_git_dir_token),
-        shipped_refs_digest: Some(content_digest(shipped_refs.as_bytes())),
-        shipped_stash_log_digest: Some(content_digest(
-            snapshot.stash_log.as_deref().unwrap_or_default(),
-        )),
-        generation: hex::encode(generation_bytes),
-    };
-    Ok((snapshot.identity, ship_info))
-}
-
-async fn materialize_source_snapshot(
-    local_cwd: &Path,
-) -> Result<MaterializeSourceSnapshot, WorkspaceGitError> {
+) -> Result<MaterializeSourcePaths, WorkspaceGitError> {
     let common_dir = resolve_git_output(
         local_cwd,
         &run_git_checked(
@@ -239,9 +226,25 @@ async fn materialize_source_snapshot(
         .await?
         .stdout,
     );
-    let common_dir_token = ensure_git_identity_token(&common_dir, REPOSITORY_ID_FILE)?;
-    let worktree_git_dir_token = ensure_git_identity_token(&worktree_git_dir, WORKTREE_ID_FILE)?;
-    let fingerprint = source_git_fingerprint(local_cwd, &common_dir, &worktree_git_dir).await?;
+    Ok(MaterializeSourcePaths {
+        common_dir_token: ensure_git_identity_token(&common_dir, REPOSITORY_ID_FILE)?,
+        worktree_git_dir_token: ensure_git_identity_token(&worktree_git_dir, WORKTREE_ID_FILE)?,
+        common_dir,
+        worktree_git_dir,
+    })
+}
+
+async fn materialize_source_snapshot(
+    local_cwd: &Path,
+    source_paths: MaterializeSourcePaths,
+    fingerprint: SourceGitFingerprint,
+) -> Result<MaterializeSourceSnapshot, WorkspaceGitError> {
+    let MaterializeSourcePaths {
+        common_dir,
+        worktree_git_dir,
+        common_dir_token,
+        worktree_git_dir_token,
+    } = source_paths;
     let head = head_state(local_cwd, "beam up", None).await?;
     let refs = list_refs_with(local_cwd, &[])
         .await?
@@ -623,13 +626,25 @@ async fn materialize_assert_source_unchanged(
     source: &SourceIdentity,
     repo_dir: &Path,
 ) -> Result<(), WorkspaceGitError> {
-    let current = source_git_fingerprint(
+    assert_no_sparse_layout(&source.local_cwd, "beam up").await?;
+    assert_no_operation_in_progress(&source.local_cwd, "beam up").await?;
+    assert_files_ref_storage(&source.local_cwd, "beam up").await?;
+    assert_no_history_boundary(&source.local_cwd, "beam up").await?;
+    let current = source_git_fingerprint_prevalidated(
         &source.local_cwd,
         &source.common_dir,
         &source.worktree_git_dir,
     )
     .await?;
     let payload = portable_git_semantic(repo_dir).await?;
+    materialize_assert_source_values(source, &current, &payload)
+}
+
+fn materialize_assert_source_values(
+    source: &SourceIdentity,
+    current: &SourceGitFingerprint,
+    payload: &PortableGitSemantic,
+) -> Result<(), WorkspaceGitError> {
     if current.value != source.fingerprint.value {
         return Err(WorkspaceGitError::message(
             "beam up: the local Git HEAD, index, refs, config, operation state, layout, or \
@@ -648,6 +663,31 @@ async fn materialize_assert_source_unchanged(
     Ok(())
 }
 
+fn materialize_ship_info(
+    snapshot: MaterializeSourceSnapshot,
+    shipped_refs: &str,
+) -> Result<(SourceIdentity, WtGitShipInfo), WorkspaceGitError> {
+    let mut generation_bytes = [0_u8; 8];
+    getrandom::fill(&mut generation_bytes)
+        .map_err(|source| WorkspaceGitError::message(format!("getrandom failed: {source}")))?;
+    let ship_info = WtGitShipInfo {
+        head: snapshot.head.commit().map(str::to_owned),
+        branch: snapshot.head.reference().map(str::to_owned),
+        common_dir: path_text(&snapshot.identity.common_dir)?.to_owned(),
+        worktree_git_dir: Some(path_text(&snapshot.identity.worktree_git_dir)?.to_owned()),
+        common_dir_id: Some(snapshot.identity.fingerprint.common_dir_id.clone()),
+        worktree_git_dir_id: Some(snapshot.identity.fingerprint.worktree_git_dir_id.clone()),
+        common_dir_token: Some(snapshot.common_dir_token),
+        worktree_git_dir_token: Some(snapshot.worktree_git_dir_token),
+        shipped_refs_digest: Some(content_digest(shipped_refs.as_bytes())),
+        shipped_stash_log_digest: Some(content_digest(
+            snapshot.stash_log.as_deref().unwrap_or_default(),
+        )),
+        generation: hex::encode(generation_bytes),
+    };
+    Ok((snapshot.identity, ship_info))
+}
+
 async fn source_git_fingerprint(
     local_cwd: &Path,
     common_dir: &Path,
@@ -657,6 +697,14 @@ async fn source_git_fingerprint(
     assert_no_operation_in_progress(local_cwd, "beam up").await?;
     assert_files_ref_storage(local_cwd, "beam up").await?;
     assert_no_history_boundary(local_cwd, "beam up").await?;
+    source_git_fingerprint_prevalidated(local_cwd, common_dir, worktree_git_dir).await
+}
+
+async fn source_git_fingerprint_prevalidated(
+    local_cwd: &Path,
+    common_dir: &Path,
+    worktree_git_dir: &Path,
+) -> Result<SourceGitFingerprint, WorkspaceGitError> {
     let current_common = resolve_git_output(
         local_cwd,
         &run_git_checked(
