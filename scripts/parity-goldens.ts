@@ -56,6 +56,8 @@ import {
   sessionInstallKey,
   type SessionShipBundle,
 } from "../src/session/ship-bundle.ts";
+import { HerdrRuntime } from "../src/runtime/herdr.ts";
+import type { ExecResult, Transport } from "../src/transport/types.ts";
 import { createWalkBlocks } from "../src/transport/local.ts";
 import { SshTransport, type SshTransportOptions } from "../src/transport/ssh.ts";
 import {
@@ -718,6 +720,161 @@ function sessionAdapterGolden() {
   };
 }
 
+async function herdrRuntimeGolden() {
+  const name = "beam-parity";
+  const scripts = [
+    ...(await herdrRuntimeGoldenStart(name)),
+    ...(await herdrRuntimeGoldenAlive(name)),
+    ...(await herdrRuntimeGoldenPeek(name)),
+    ...(await herdrRuntimeGoldenControl(name)),
+  ];
+  const unused = {} as unknown as Transport;
+  scripts.push({
+    label: "attach-command",
+    output: new HerdrRuntime(unused).attachCommand(name),
+  });
+  return { scripts };
+}
+
+async function herdrRuntimeGoldenStart(name: string) {
+  const transport = new HerdrGoldenTransport([
+    { kind: "checked", output: "" },
+    { kind: "checked", output: "" },
+    { kind: "checked", output: herdrWorkspaceCreatedJson("w1:p1") },
+    { kind: "checked", output: "" },
+  ]);
+  const runtime = new HerdrRuntime(transport as unknown as Transport);
+  await runtime.start(name, "/srv/beam/work space", ["omp", "--resume", "session 'x'"]);
+  const calls = transport.done();
+  if (calls.length !== 4) {
+    throw new Error(`herdr start golden made ${calls.length} calls, expected 4`);
+  }
+  return [
+    { label: "start-upload", output: calls[0]! },
+    { label: "start-ensure-server", output: calls[1]! },
+    { label: "start-workspace-create", output: calls[2]! },
+    { label: "start-pane-run", output: calls[3]! },
+  ];
+}
+
+async function herdrRuntimeGoldenAlive(name: string) {
+  const present = new HerdrGoldenTransport([
+    { kind: "exec", result: { code: 0, stdout: herdrPaneListJson(["w1:p1"]), stderr: "" } },
+  ]);
+  const absent = new HerdrGoldenTransport([
+    { kind: "exec", result: { code: 0, stdout: herdrPaneListJson([]), stderr: "" } },
+  ]);
+  const presentResult = await new HerdrRuntime(present as unknown as Transport).alive(name);
+  const absentResult = await new HerdrRuntime(absent as unknown as Transport).alive(name);
+  if (!presentResult || absentResult) {
+    throw new Error("herdr alive golden did not classify pane presence");
+  }
+  return [
+    { label: "alive-present-list", output: present.done()[0]! },
+    { label: "alive-absent-list", output: absent.done()[0]! },
+  ];
+}
+
+async function herdrRuntimeGoldenPeek(name: string) {
+  const screen = "first\n\nsecond\nthird";
+  const transport = new HerdrGoldenTransport([
+    { kind: "checked", output: herdrPaneListJson(["w1:p1"]) },
+    { kind: "checked", output: screen },
+  ]);
+  const output = await new HerdrRuntime(transport as unknown as Transport).peek(name, 2);
+  if (output !== "second\nthird") {
+    throw new Error(`herdr peek golden returned ${JSON.stringify(output)}`);
+  }
+  const calls = transport.done();
+  if (calls.length !== 2) {
+    throw new Error(`herdr peek golden made ${calls.length} calls, expected 2`);
+  }
+  return [
+    { label: "peek-pane-list", output: calls[0]! },
+    { label: "peek-pane-read", output: calls[1]! },
+  ];
+}
+
+async function herdrRuntimeGoldenControl(name: string) {
+  const interrupt = new HerdrGoldenTransport([
+    { kind: "exec", result: { code: 0, stdout: herdrPaneListJson(["w1:p1"]), stderr: "" } },
+    { kind: "exec", result: { code: 0, stdout: "", stderr: "" } },
+  ]);
+  await new HerdrRuntime(interrupt as unknown as Transport).interrupt(name);
+  const kill = new HerdrGoldenTransport([
+    { kind: "exec", result: { code: 0, stdout: "", stderr: "" } },
+    { kind: "exec", result: { code: 0, stdout: "", stderr: "" } },
+  ]);
+  await new HerdrRuntime(kill as unknown as Transport).kill(name);
+  const interruptCalls = interrupt.done();
+  const killCalls = kill.done();
+  if (interruptCalls.length !== 2 || killCalls.length !== 2) {
+    throw new Error("herdr control golden did not make two calls per operation");
+  }
+  return [
+    { label: "interrupt-pane-list", output: interruptCalls[0]! },
+    { label: "interrupt-send-keys", output: interruptCalls[1]! },
+    { label: "kill-server-stop", output: killCalls[0]! },
+    { label: "kill-session-delete", output: killCalls[1]! },
+  ];
+}
+
+function herdrPaneListJson(paneIds: readonly string[]): string {
+  return JSON.stringify({
+    id: "cli:pane:list",
+    result: { panes: paneIds.map((pane_id) => ({ pane_id })), type: "pane_list" },
+  });
+}
+
+function herdrWorkspaceCreatedJson(paneId: string): string {
+  return JSON.stringify({
+    id: "cli:workspace:create",
+    result: { root_pane: { pane_id: paneId }, type: "workspace_created" },
+  });
+}
+
+type HerdrGoldenStep =
+  | { readonly kind: "exec"; readonly result: ExecResult }
+  | { readonly kind: "checked"; readonly output: string };
+
+class HerdrGoldenTransport {
+  readonly calls: string[] = [];
+
+  constructor(private readonly steps: HerdrGoldenStep[]) {}
+
+  async exec(command: string): Promise<ExecResult> {
+    const step = this.take(command);
+    if (step.kind === "exec") {
+      return step.result;
+    }
+    throw new Error(`expected checked herdr call, got exec: ${command}`);
+  }
+
+  async execChecked(command: string): Promise<string> {
+    const step = this.take(command);
+    if (step.kind === "checked") {
+      return step.output;
+    }
+    throw new Error(`expected exec herdr call, got checked: ${command}`);
+  }
+
+  done(): readonly string[] {
+    if (this.steps.length !== 0) {
+      throw new Error(`herdr golden left ${this.steps.length} scripted calls unused`);
+    }
+    return this.calls;
+  }
+
+  private take(command: string): HerdrGoldenStep {
+    this.calls.push(command);
+    const step = this.steps.shift();
+    if (step === undefined) {
+      throw new Error(`unscripted herdr golden call: ${command}`);
+    }
+    return step;
+  }
+}
+
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes("--check");
   const goldens = new Map<string, string>([
@@ -729,6 +886,7 @@ async function main(): Promise<void> {
     ["local-transport.json", serialize(localTransportGolden())],
     ["ssh-transport.json", serialize(sshTransportGolden())],
     ["kubectl-transport.json", serialize(kubectlTransportGolden())],
+    ["herdr-runtime.json", serialize(await herdrRuntimeGolden())],
     ["session-adapters.json", serialize(sessionAdapterGolden())],
   ]);
   let drifted = false;

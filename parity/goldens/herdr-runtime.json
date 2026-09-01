@@ -1,0 +1,56 @@
+{
+  "scripts": [
+    {
+      "label": "start-upload",
+      "output": "mkdir -p '/srv/beam/work space/.beam' && printf '%s\\n' ''\\''omp'\\'' '\\''--resume'\\'' '\\''session '\\''\\'\\'''\\''x'\\''\\'\\'''\\'''\\''; code=$?; echo; echo \"[beam] agent exited ($code) - shell below\"' > '/srv/beam/work space/.beam/agent-start.sh'"
+    },
+    {
+      "label": "start-ensure-server",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }\nif ! HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane list >/dev/null 2>&1; then\n  nohup env HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr server >/dev/null 2>&1 &\n  tries=0\n  until HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane list >/dev/null 2>&1; do\n    tries=$((tries + 1))\n    if [ \"$tries\" -ge 50 ]; then\n      echo \"beam: herdr server for session beam-parity did not answer after 50 probes (10s)\" >&2\n      exit 1\n    fi\n    sleep 0.2\n  done\nfi"
+    },
+    {
+      "label": "start-workspace-create",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr workspace create --cwd '/srv/beam/work space' --no-focus"
+    },
+    {
+      "label": "start-pane-run",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane run 'w1:p1' 'bash .beam/agent-start.sh'"
+    },
+    {
+      "label": "alive-present-list",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane list"
+    },
+    {
+      "label": "alive-absent-list",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane list"
+    },
+    {
+      "label": "peek-pane-list",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane list"
+    },
+    {
+      "label": "peek-pane-read",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane read 'w1:p1' --source visible --lines 2 --format text"
+    },
+    {
+      "label": "interrupt-pane-list",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane list"
+    },
+    {
+      "label": "interrupt-send-keys",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr pane send-keys 'w1:p1' ctrl+c"
+    },
+    {
+      "label": "kill-server-stop",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr server stop"
+    },
+    {
+      "label": "kill-session-delete",
+      "output": "dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION='beam-parity' HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" herdr session delete 'beam-parity' --json"
+    },
+    {
+      "label": "attach-command",
+      "output": "bash -c 'dir=\"${TMPDIR:-/tmp}/herdr-$(id -u)\"; mkdir -p -m 700 \"$dir\" && [ -O \"$dir\" ] || { echo \"beam: herdr socket dir $dir is not owned by uid $(id -u); remove it and retry\" >&2; exit 1; }; HERDR_SESSION=beam-parity HERDR_SOCKET_PATH=\"$dir/beam-parity.sock\" exec herdr session attach beam-parity'"
+    }
+  ]
+}
