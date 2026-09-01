@@ -1,17 +1,20 @@
 //! Goal: prove the Rust herdr runtime preserves start, observation, and
 //! termination safety before command orchestration moves from TypeScript.
 //!
-//! Method: a scripted transport pins three-valued liveness and every race
-//! refusal; one optional real-herdr round trip proves the generated commands
-//! against the installed system binary.
+//! Method: scripted and local transports pin three-valued liveness,
+//! read-once credentials, and every race refusal; one optional real-herdr
+//! round trip proves the generated commands against the installed binary.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use beam::runtime::herdr::HerdrRuntime;
+use beam::runtime::herdr::{HerdrRuntime, PreparedRuntimeEnvironment, RuntimeStartOptions};
+use beam::transport::local::LocalTransport;
 use beam::transport::{ExecResult, SyncOptions, Transport, TransportFuture};
 use tempfile::tempdir;
 
@@ -162,6 +165,13 @@ fn pane_list_json(pane_ids: &[&str]) -> String {
     })
     .to_string()
 }
+fn workspace_created_json(pane_id: &str) -> String {
+    serde_json::json!({
+        "id": "cli:workspace:create",
+        "result": { "root_pane": { "pane_id": pane_id }, "type": "workspace_created" }
+    })
+    .to_string()
+}
 
 fn server_not_running_json() -> String {
     serde_json::json!({
@@ -177,6 +187,8 @@ async fn start_stops_before_typing_when_workspace_identity_is_unknown() {
         checked_step("printf", ""),
         checked_step("herdr server", ""),
         checked_step("workspace create", "not json at all"),
+        exec_step("server stop", 0, "", ""),
+        exec_step("session delete", 0, "", ""),
     ]);
     let runtime = HerdrRuntime::new(&transport);
     let error = runtime
@@ -185,9 +197,10 @@ async fn start_stops_before_typing_when_workspace_identity_is_unknown() {
         .expect_err("unparseable workspace must fail");
     assert_eq!(
         error.to_string(),
-        "herdr workspace create for beam-test returned no root pane id: not json at all"
+        "runtime start failed and was cleaned up; retry beam up"
     );
-    assert_eq!(transport.calls().len(), 3);
+    assert!(error.is_retryable_start());
+    assert_eq!(transport.calls().len(), 5);
     assert!(
         transport
             .calls()
@@ -195,6 +208,128 @@ async fn start_stops_before_typing_when_workspace_identity_is_unknown() {
             .all(|call| !call.contains("pane run"))
     );
     transport.assert_drained();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn prepared_environment_is_consumed_on_success_and_discarded_on_failure() {
+    let prepared = PreparedRuntimeEnvironment {
+        path: "/workspace/.beam/runtime-environment/environment".to_owned(),
+        cwd_abs: "/workspace".to_owned(),
+        owner: "beam-workspace-v1 record 0123456789abcdef0123456789abcdef".to_owned(),
+    };
+    let success = ScriptedTransport::new(vec![
+        checked_step("runtime credential environment is missing", ""),
+        checked_step("herdr server", ""),
+        checked_step("workspace create", workspace_created_json("w1:p1")),
+        checked_step("pane run", ""),
+        checked_step("coding client did not consume", ""),
+    ]);
+    HerdrRuntime::new(&success)
+        .start_with_options(
+            "beam-test",
+            "/workspace",
+            &["omp".to_owned()],
+            RuntimeStartOptions {
+                prepared_environment: Some(&prepared),
+                ..RuntimeStartOptions::default()
+            },
+        )
+        .await
+        .expect("start with prepared environment");
+    assert_eq!(success.calls().len(), 5);
+    assert!(success.calls()[4].contains("while [ -e"));
+    success.assert_drained();
+
+    let failure = ScriptedTransport::new(vec![
+        checked_step("runtime credential environment is missing", ""),
+        checked_step("herdr server", ""),
+        checked_step("workspace create", "not json"),
+        exec_step("server stop", 0, "", ""),
+        exec_step("session delete", 0, "", ""),
+        checked_step("rm -f -- environment", ""),
+    ]);
+    let error = HerdrRuntime::new(&failure)
+        .start_with_options(
+            "beam-test",
+            "/workspace",
+            &["omp".to_owned()],
+            RuntimeStartOptions {
+                prepared_environment: Some(&prepared),
+                ..RuntimeStartOptions::default()
+            },
+        )
+        .await
+        .expect_err("failed start must clean up");
+    assert!(error.is_retryable_start());
+    assert_eq!(failure.calls().len(), 6);
+    assert!(failure.calls()[5].contains("runtime credentials still exist"));
+    assert!(
+        failure
+            .calls()
+            .iter()
+            .all(|call| !call.contains("LLM_PROXY_SESSION_TOKEN"))
+    );
+    failure.assert_drained();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_environment_is_private_bounded_and_guardedly_discarded() {
+    let temporary = tempdir().expect("temporary transport home");
+    let workspace = temporary.path().join("workspace");
+    fs::create_dir_all(workspace.join(".beam")).expect("owned workspace");
+    let owner = "beam-workspace-v1 record 0123456789abcdef0123456789abcdef";
+    fs::write(workspace.join(".beam/owner"), owner).expect("owner marker");
+    let transport = LocalTransport::new(temporary.path()).expect("local transport");
+    let runtime = HerdrRuntime::new(&transport);
+    let environment = BTreeMap::from([
+        (
+            "LLM_PROXY_SESSION_TOKEN".to_owned(),
+            "private 'token'".to_owned(),
+        ),
+        (
+            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+            "oauth-token".to_owned(),
+        ),
+    ]);
+    let cwd_abs = workspace.to_str().expect("utf-8 workspace");
+    let prepared = runtime
+        .prepare_environment(cwd_abs, &environment, Some(owner))
+        .await
+        .expect("stage environment")
+        .expect("non-empty environment");
+    let staged = workspace.join(".beam/runtime-environment/environment");
+    assert_eq!(
+        fs::read_to_string(&staged).expect("staged environment"),
+        concat!(
+            "CLAUDE_CODE_OAUTH_TOKEN='oauth-token'\n",
+            r#"LLM_PROXY_SESSION_TOKEN='private '\''token'\'''"#,
+            "\n"
+        )
+    );
+    let mode = fs::metadata(&staged)
+        .expect("staged metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+    runtime
+        .discard_environment(Some(&prepared))
+        .await
+        .expect("guarded discard");
+    assert!(!staged.exists());
+
+    let disallowed = BTreeMap::from([("PATH".to_owned(), "secret".to_owned())]);
+    let error = runtime
+        .prepare_environment(cwd_abs, &disallowed, Some(owner))
+        .await
+        .expect_err("unapproved name must fail");
+    assert!(error.to_string().contains("is not allowed"));
+    let oversized = BTreeMap::from([("LLM_PROXY_SESSION_TOKEN".to_owned(), "x".repeat(64 * 1024))]);
+    let error = runtime
+        .prepare_environment(cwd_abs, &oversized, Some(owner))
+        .await
+        .expect_err("oversized environment must fail");
+    assert!(error.to_string().contains("exceeds 65536 bytes"));
 }
 
 #[tokio::test(flavor = "current_thread")]
