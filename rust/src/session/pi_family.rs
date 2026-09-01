@@ -598,49 +598,46 @@ where
         ),
     ];
     for entry in manifest {
-        let destination = format!("\"$__dest_arts/\"{}", shq(&entry.path));
-        let source = format!("\"$__stage_arts/\"{}", shq(&entry.path));
-        if entry.kind == "link" {
-            let target = entry
-                .target
-                .as_deref()
-                .expect("tree manifests give every link a target");
-            lines.push(format!(
-                "if [ ! -L {destination} ] || [ \"$(readlink {destination})\" != {} ]; then {}; fi",
-                shq(target),
-                fail(&entry.path)
-            ));
-        } else if entry.kind == "dir" {
-            lines.push(format!(
-                "if [ -L {destination} ] || [ ! -d {destination} ]; then {}; fi",
-                fail(&entry.path)
-            ));
-            lines.push(install_read_mode_script(&destination));
-            lines.push(format!(
-                "if [ \"$__m\" != {} ]; then {}; fi",
-                install_mode_octal(
-                    entry
-                        .mode
-                        .expect("tree manifests give every directory a mode")
-                ),
-                fail(&format!("{} (mode)", entry.path))
-            ));
-        } else {
-            debug_assert_eq!(entry.kind, "file");
-            lines.push(format!(
-                "if [ -L {destination} ] || [ ! -f {destination} ]; then {}; fi",
-                fail(&entry.path)
-            ));
-            lines.push(format!(
-                "cmp -s -- {source} {destination} || {{ {}; }}",
-                fail(&entry.path)
-            ));
-            lines.push(install_read_mode_script(&destination));
-            lines.push(format!(
-                "if [ \"$__m\" != {} ]; then {}; fi",
-                install_mode_octal(entry.mode.expect("tree manifests give every file a mode")),
-                fail(&format!("{} (mode)", entry.path))
-            ));
+        let path = entry.path();
+        let destination = format!("\"$__dest_arts/\"{}", shq(path));
+        let source = format!("\"$__stage_arts/\"{}", shq(path));
+        match entry {
+            TreeManifestEntry::Link { target, .. } => {
+                lines.push(format!(
+                    "if [ ! -L {destination} ] || [ \"$(readlink {destination})\" != {} ]; then \
+                     {}; fi",
+                    shq(target),
+                    fail(path)
+                ));
+            }
+            TreeManifestEntry::Dir { mode, .. } => {
+                lines.push(format!(
+                    "if [ -L {destination} ] || [ ! -d {destination} ]; then {}; fi",
+                    fail(path)
+                ));
+                lines.push(install_read_mode_script(&destination));
+                lines.push(format!(
+                    "if [ \"$__m\" != {} ]; then {}; fi",
+                    install_mode_octal(*mode),
+                    fail(&format!("{path} (mode)"))
+                ));
+            }
+            TreeManifestEntry::File { mode, .. } => {
+                lines.push(format!(
+                    "if [ -L {destination} ] || [ ! -f {destination} ]; then {}; fi",
+                    fail(path)
+                ));
+                lines.push(format!(
+                    "cmp -s -- {source} {destination} || {{ {}; }}",
+                    fail(path)
+                ));
+                lines.push(install_read_mode_script(&destination));
+                lines.push(format!(
+                    "if [ \"$__m\" != {} ]; then {}; fi",
+                    install_mode_octal(*mode),
+                    fail(&format!("{path} (mode)"))
+                ));
+            }
         }
     }
     lines
@@ -718,58 +715,55 @@ fn install_publish_artifacts_script(
 ) -> Vec<String> {
     let mut lines = Vec::with_capacity(manifest.len() * 5);
     for entry in manifest {
-        let destination = format!("\"$__dest_arts/\"{}", shq(&entry.path));
-        let source = format!("\"$__stage_arts/\"{}", shq(&entry.path));
+        let path = entry.path();
+        let destination = format!("\"$__dest_arts/\"{}", shq(path));
+        let source = format!("\"$__stage_arts/\"{}", shq(path));
         let conflict = install_differs_script(&format!(
-            "artifacts {artifacts_destination} (conflicting entry {})",
-            entry.path
+            "artifacts {artifacts_destination} (conflicting entry {path})"
         ));
-        if entry.kind == "link" {
-            let target = entry
-                .target
-                .as_deref()
-                .expect("tree manifests give every link a target");
-            lines.extend([
-                format!(
-                    "  if [ -L {destination} ]; then [ \"$(readlink {destination})\" = {} ] || {{ \
-                     {conflict}; }};",
-                    shq(target)
-                ),
-                format!("  elif [ -e {destination} ]; then {conflict};"),
-                format!(
-                    "  else ln -s -- {} {destination} || exit 67; fi",
-                    shq(target)
-                ),
-            ]);
-        } else if entry.kind == "dir" {
-            lines.extend([
-                format!("  if [ -L {destination} ]; then {conflict}; fi"),
-                format!("  if [ ! -e {destination} ]; then mkdir -- {destination} || exit 67; fi"),
-                format!("  [ -d {destination} ] || {{ {conflict}; }}"),
-                format!(
-                    "  chmod {} {destination} || exit 67",
-                    install_mode_octal(
-                        entry
-                            .mode
-                            .expect("tree manifests give every directory a mode")
-                    )
-                ),
-            ]);
-        } else {
-            debug_assert_eq!(entry.kind, "file");
-            lines.extend([
-                format!("  if [ -L {destination} ]; then {conflict}; fi"),
-                format!(
-                    "  if [ ! -e {destination} ]; then ( set -C; cat {source} > {destination} ) \
-                     2>/dev/null || exit 67; fi"
-                ),
-                format!("  [ -f {destination} ] || {{ {conflict}; }}"),
-                format!("  cmp -s -- {source} {destination} || {{ {conflict}; }}"),
-                format!(
-                    "  chmod {} {destination} || exit 67",
-                    install_mode_octal(entry.mode.expect("tree manifests give every file a mode"))
-                ),
-            ]);
+        match entry {
+            TreeManifestEntry::Link { target, .. } => {
+                lines.extend([
+                    format!(
+                        "  if [ -L {destination} ]; then [ \"$(readlink {destination})\" = {} ] || \
+                         {{ {conflict}; }};",
+                        shq(target)
+                    ),
+                    format!("  elif [ -e {destination} ]; then {conflict};"),
+                    format!(
+                        "  else ln -s -- {} {destination} || exit 67; fi",
+                        shq(target)
+                    ),
+                ]);
+            }
+            TreeManifestEntry::Dir { mode, .. } => {
+                lines.extend([
+                    format!("  if [ -L {destination} ]; then {conflict}; fi"),
+                    format!(
+                        "  if [ ! -e {destination} ]; then mkdir -- {destination} || exit 67; fi"
+                    ),
+                    format!("  [ -d {destination} ] || {{ {conflict}; }}"),
+                    format!(
+                        "  chmod {} {destination} || exit 67",
+                        install_mode_octal(*mode)
+                    ),
+                ]);
+            }
+            TreeManifestEntry::File { mode, .. } => {
+                lines.extend([
+                    format!("  if [ -L {destination} ]; then {conflict}; fi"),
+                    format!(
+                        "  if [ ! -e {destination} ]; then ( set -C; cat {source} > {destination} ) \
+                         2>/dev/null || exit 67; fi"
+                    ),
+                    format!("  [ -f {destination} ] || {{ {conflict}; }}"),
+                    format!("  cmp -s -- {source} {destination} || {{ {conflict}; }}"),
+                    format!(
+                        "  chmod {} {destination} || exit 67",
+                        install_mode_octal(*mode)
+                    ),
+                ]);
+            }
         }
     }
     lines
@@ -997,23 +991,17 @@ pub fn pi_family_install_script_golden() -> Vec<(&'static str, String)> {
     let remote_cwd = "/srv/beam/work space";
     let key = "key-123";
     let manifest = vec![
-        TreeManifestEntry {
+        TreeManifestEntry::Link {
             path: "latest".to_owned(),
-            kind: "link".to_owned(),
-            mode: None,
-            target: Some("nested/blob 'one'".to_owned()),
+            target: "nested/blob 'one'".to_owned(),
         },
-        TreeManifestEntry {
+        TreeManifestEntry::Dir {
             path: "nested".to_owned(),
-            kind: "dir".to_owned(),
-            mode: Some(0o700),
-            target: None,
+            mode: 0o700,
         },
-        TreeManifestEntry {
+        TreeManifestEntry::File {
             path: "nested/blob 'one'".to_owned(),
-            kind: "file".to_owned(),
-            mode: Some(0o600),
-            target: None,
+            mode: 0o600,
         },
     ];
     let cases = [

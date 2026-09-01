@@ -1,0 +1,1 @@
+astral sorts first in JavaScript
