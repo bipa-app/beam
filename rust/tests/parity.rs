@@ -5,7 +5,9 @@
 //! pinned against drift by the `test` CI job — and assert every recorded
 //! input/output pair against the ported Rust function.
 
-use std::path::Path;
+use std::fs;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
 
 use beam::util::digest::{file_sha256, file_sha256_chunked, tree_manifest, tree_sha256};
 use beam::util::shell::{shjoin, shq, shq_remote_path};
@@ -19,8 +21,35 @@ fn golden(name: &str) -> serde_json::Value {
     serde_json::from_str(&text).unwrap_or_else(|err| panic!("parse {}: {err}", path.display()))
 }
 
-fn fixture_tree() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../parity/fixtures/tree")
+fn fixture_tree() -> (tempfile::TempDir, PathBuf) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../parity/fixtures/tree");
+    let temp_dir = tempfile::tempdir().expect("create deterministic tree fixture");
+    let tree = temp_dir.path().join("tree");
+    fs::create_dir(&tree).expect("create fixture root");
+    for dir in ["empty-dir", "nested"] {
+        fs::create_dir(tree.join(dir)).unwrap_or_else(|error| panic!("create {dir}: {error}"));
+    }
+    for (file, mode) in [
+        ("alpha.txt", 0o755),
+        ("empty-dir/.keep", 0o644),
+        ("nested/beta.txt", 0o644),
+        ("one-shot.txt", 0o644),
+        ("😀.txt", 0o644),
+        (".txt", 0o644),
+    ] {
+        let destination = tree.join(file);
+        fs::copy(source.join(file), &destination)
+            .unwrap_or_else(|error| panic!("copy {file}: {error}"));
+        fs::set_permissions(&destination, fs::Permissions::from_mode(mode))
+            .unwrap_or_else(|error| panic!("chmod {file}: {error}"));
+    }
+    let link_target = fs::read_link(source.join("linked-beta")).expect("read fixture link");
+    symlink(link_target, tree.join("linked-beta")).expect("create fixture link");
+    for path in [&tree, &tree.join("empty-dir"), &tree.join("nested")] {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("chmod {}: {error}", path.display()));
+    }
+    (temp_dir, tree)
 }
 
 #[test]
@@ -68,15 +97,13 @@ fn shjoin_matches_typescript_golden() {
 #[test]
 fn file_sha256_matches_typescript_golden() {
     let cases = golden("digest.json");
-    let tree = fixture_tree();
+    let (_temp_dir, tree) = fixture_tree();
     let one_shot = tree.join("one-shot.txt");
     let expected = cases["oneShot"]["sha256"].as_str().expect("oneShot.sha256");
     assert_eq!(file_sha256(&one_shot).expect("hash one-shot"), expected);
 
-    let multi_chunk = tree.join("../multi-chunk.txt");
-    let multi_chunk = multi_chunk
-        .canonicalize()
-        .unwrap_or_else(|err| panic!("canonicalize {}: {err}", multi_chunk.display()));
+    let multi_chunk =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../parity/fixtures/multi-chunk.txt");
     for result in cases["multiChunk"]["results"]
         .as_array()
         .expect("results is an array")
@@ -94,7 +121,8 @@ fn file_sha256_matches_typescript_golden() {
 fn tree_sha256_matches_typescript_golden() {
     let cases = golden("digest.json");
     let expected = cases["treeSha256"].as_str().expect("treeSha256");
-    assert_eq!(tree_sha256(&fixture_tree()).expect("hash tree"), expected);
+    let (_temp_dir, tree) = fixture_tree();
+    assert_eq!(tree_sha256(&tree).expect("hash tree"), expected);
 }
 
 #[test]
@@ -102,6 +130,11 @@ fn tree_manifest_matches_typescript_golden() {
     let cases = golden("digest.json");
     let expected: Vec<beam::util::digest::TreeManifestEntry> =
         serde_json::from_value(cases["treeManifest"].clone()).expect("manifest shape");
-    let actual = tree_manifest(&fixture_tree()).expect("walk tree");
+    let (_temp_dir, tree) = fixture_tree();
+    let actual = tree_manifest(&tree).expect("walk tree");
     assert_eq!(actual, expected);
+    let expected_json =
+        serde_json::to_string(&cases["treeManifest"]).expect("serialize golden manifest");
+    let actual_json = serde_json::to_string(&actual).expect("serialize Rust manifest");
+    assert_eq!(actual_json, expected_json, "manifest JSON field order");
 }

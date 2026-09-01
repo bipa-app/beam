@@ -23,7 +23,16 @@
  * seam that needs a clock or nonce injects it as a fixed corpus value.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { fileSha256, treeManifest, treeSha256 } from "../src/util/digest.ts";
@@ -181,25 +190,63 @@ function quotingGolden() {
 }
 
 function digestGolden() {
-  const treeDir = join(FIXTURES_DIR, "tree");
-  const oneShotPath = join(FIXTURES_DIR, "tree", "one-shot.txt");
-  const multiChunkPath = join(FIXTURES_DIR, "multi-chunk.txt");
-  const oneShot = {
-    bytes: ONE_SHOT_BYTES,
-    sha256: fileSha256(oneShotPath),
-  };
-  const multiChunk = {
-    size: MULTI_CHUNK_TEXT.length * 97,
-    results: MULTI_CHUNK_SIZES.map((chunkBytes) => {
-      return { chunkBytes, sha256: fileSha256(multiChunkPath, chunkBytes) };
-    }),
-  };
-  return {
-    oneShot,
-    multiChunk,
-    treeSha256: treeSha256(treeDir),
-    treeManifest: treeManifest(treeDir),
-  };
+  let digestFailed = false;
+  const fixtureStage = mkdtempSync(join(tmpdir(), "beam-parity-"));
+  try {
+    const treeDir = join(fixtureStage, "tree");
+    const oneShotPath = join(FIXTURES_DIR, "tree", "one-shot.txt");
+    const multiChunkPath = join(FIXTURES_DIR, "multi-chunk.txt");
+    cpSync(join(FIXTURES_DIR, "tree"), treeDir, {
+      recursive: true,
+      verbatimSymlinks: true,
+    });
+    chmodSync(treeDir, 0o755);
+    for (const path of ["empty-dir", "nested"]) {
+      chmodSync(join(treeDir, path), 0o755);
+    }
+    chmodSync(join(treeDir, "alpha.txt"), 0o755);
+    for (const path of [
+      "empty-dir/.keep",
+      "nested/beta.txt",
+      "one-shot.txt",
+      "😀.txt",
+      ".txt",
+    ]) {
+      chmodSync(join(treeDir, path), 0o644);
+    }
+    const oneShotBytes = readFileSync(oneShotPath, "utf8");
+    if (oneShotBytes !== ONE_SHOT_BYTES) {
+      throw new Error(`one-shot fixture does not match ONE_SHOT_BYTES: ${oneShotPath}`);
+    }
+    const multiChunkBytes = readFileSync(multiChunkPath, "utf8");
+    if (multiChunkBytes !== MULTI_CHUNK_TEXT.repeat(97)) {
+      throw new Error(`multi-chunk fixture does not match MULTI_CHUNK_TEXT: ${multiChunkPath}`);
+    }
+    return {
+      oneShot: { bytes: oneShotBytes, sha256: fileSha256(oneShotPath) },
+      multiChunk: {
+        size: Buffer.byteLength(multiChunkBytes),
+        results: MULTI_CHUNK_SIZES.map((chunkBytes) => {
+          return { chunkBytes, sha256: fileSha256(multiChunkPath, chunkBytes) };
+        }),
+      },
+      treeSha256: treeSha256(treeDir),
+      treeManifest: treeManifest(treeDir),
+    };
+  } catch (error) {
+    digestFailed = true;
+    throw error;
+  } finally {
+    try {
+      rmSync(fixtureStage, { recursive: true, force: true });
+    } catch (cleanupError) {
+      if (!digestFailed) {
+        throw cleanupError;
+      }
+      const detail = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      console.error(`cannot clean parity fixture ${fixtureStage}: ${detail}`);
+    }
+  }
 }
 
 function serialize(golden: unknown): string {
@@ -696,10 +743,17 @@ async function main(): Promise<void> {
     let current: string;
     try {
       current = readFileSync(path, "utf8");
-    } catch {
-      console.error(`missing golden ${name} — run bun scripts/parity-goldens.ts`);
-      drifted = true;
-      continue;
+    } catch (error) {
+      if (error instanceof Error) {
+        if ("code" in error) {
+          if (error.code === "ENOENT") {
+            console.error(`missing golden ${name} — run bun scripts/parity-goldens.ts`);
+            drifted = true;
+            continue;
+          }
+        }
+      }
+      throw new Error(`cannot read golden ${path}`, { cause: error });
     }
     if (current !== rendered) {
       console.error(`golden drift in ${name} — regenerate with bun scripts/parity-goldens.ts`);

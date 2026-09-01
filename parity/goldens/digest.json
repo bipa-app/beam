@@ -32,7 +32,7 @@
       }
     ]
   },
-  "treeSha256": "258cd417cc6ff9dd85689293c3cbf0716cfc1e0e0faec020b91ae2bac247a601",
+  "treeSha256": "73ab1ae65749796716ba4e1c5f7415b4f2ad86bfe6c1732fc54360900b9d6127",
   "treeManifest": [
     {
       "path": "alpha.txt",
@@ -66,6 +66,16 @@
     },
     {
       "path": "one-shot.txt",
+      "kind": "file",
+      "mode": 420
+    },
+    {
+      "path": "😀.txt",
+      "kind": "file",
+      "mode": 420
+    },
+    {
+      "path": ".txt",
       "kind": "file",
       "mode": 420
     }
