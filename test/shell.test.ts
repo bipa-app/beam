@@ -1,8 +1,8 @@
 /**
  * Goal: the shell seam's safety contracts — `shq`/`shjoin`/`shqRemotePath`
  * survive hostile content through a real bash, `run` enforces its per-stream
- * output cap loudly (no deadlock, no unbounded buffering), and HerdrRuntime
- * drives the four-step start sequence, maps pane-list outcomes to
+ * output cap and timeout loudly (no deadlock, no unbounded buffering), and
+ * HerdrRuntime drives the four-step start sequence, maps pane-list outcomes to
  * three-valued liveness, and interrupts/destroys only with proof, failing
  * closed on anything it cannot classify.
  *
@@ -12,8 +12,9 @@
  * real herdr 0.8.0 binary's output.
  */
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { HerdrRuntime } from "../src/runtime/herdr.ts";
-import type { Transport } from "../src/transport/types.ts";
+import type { SyncOptions, Transport } from "../src/transport/types.ts";
 import { run, shjoin, shq, shqRemotePath } from "../src/util/shell.ts";
 
 describe("shell quoting", () => {
@@ -103,6 +104,14 @@ describe("run output bounds", () => {
   test("rejects a non-positive or non-integer cap before spawning", async () => {
     await expect(run(["true"], { maxOutputBytes: 0 })).rejects.toThrow("positive integer");
     await expect(run(["true"], { maxOutputBytes: 1.5 })).rejects.toThrow("positive integer");
+  });
+
+  test("timeout kills descendants that inherit the captured pipes", async () => {
+    const startedAt = Date.now();
+    await expect(
+      run(["bash", "-c", "sleep 30 & wait"], { timeoutMs: 50 }),
+    ).rejects.toThrow("command timed out after 50ms: bash");
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
   test("nonzero exit still returns code with both captured streams", async () => {
@@ -244,6 +253,10 @@ describe("herdr runtime", () => {
         }
         return step.stdout;
       },
+      exec: async (command: string) => {
+        calls.push(command);
+        return { code: 0, stdout: "", stderr: "" };
+      },
     } as unknown as Transport;
     return { transport, calls };
   }
@@ -280,6 +293,42 @@ describe("herdr runtime", () => {
       },
     } as unknown as Transport;
     return { transport, calls };
+  }
+
+  interface EnvironmentUpload {
+    localDir: string;
+    remoteDir: string;
+    text: string;
+    options: SyncOptions;
+  }
+
+  function assertEnvironmentUpload(
+    uploads: EnvironmentUpload[],
+    calls: string[],
+    steps: Array<{ match: string; stdout: string }>,
+    token: string,
+  ): void {
+    expect(uploads).toHaveLength(1);
+    const upload = uploads[0];
+    if (upload === undefined) throw new Error("runtime did not stage its environment");
+    expect(upload.remoteDir).toBe("/workspace/.beam/runtime-environment");
+    expect(upload.options).toEqual({
+      checksum: true,
+      owned: { root: "/workspace", ownerBytes: "beam-owner-bytes" },
+    });
+    expect(upload.text).toBe(
+      `CLAUDE_CODE_OAUTH_TOKEN=${shq(token)}\nLLM_PROXY_SESSION_TOKEN=${shq(token)}\n`,
+    );
+    expect(existsSync(upload.localDir)).toBe(false);
+    expect(calls.join("\n")).not.toContain(token);
+    const startScript = calls.find((call) => call.includes("agent-start.sh"));
+    if (startScript === undefined) throw new Error("runtime did not write its start script");
+    expect(startScript).toContain("/workspace/.beam/runtime-environment/environment");
+    expect(startScript).toContain('rm -f -- "$__beam_env_file"');
+    expect(startScript).toContain('[ -L "$__beam_env_file" ]');
+    expect(startScript).toContain("could not remove runtime credential environment");
+    expect(calls.join("\n")).toContain("chmod 600 environment");
+    expect(steps).toEqual([]);
   }
 
   test("start issues the four-step sequence and threads the parsed pane id", async () => {
@@ -336,6 +385,86 @@ describe("herdr runtime", () => {
     for (const call of calls) expect(call).not.toContain("bash -lc");
   });
 
+  test("start delivers secret environment through owned sync and removes the stage", async () => {
+    const token = "proxy-secret-token";
+    const steps = [
+      { match: "chmod 600 environment", stdout: "" },
+      { match: "printf", stdout: "" },
+      { match: "herdr server", stdout: "" },
+      { match: "workspace create", stdout: workspaceCreatedJson("w1:p1") },
+      { match: "pane run", stdout: "" },
+      { match: "attempts=0", stdout: "" },
+    ];
+    const calls: string[] = [];
+    const uploads: EnvironmentUpload[] = [];
+    const transport: Transport = {
+      label: "credential-channel",
+      exec: async (command) => {
+        calls.push(`exec:${command}`);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      execChecked: async (command) => {
+        calls.push(command);
+        const step = steps.shift();
+        if (step === undefined) throw new Error(`unscripted execChecked: ${command}`);
+        if (!command.includes(step.match)) {
+          throw new Error(`expected a "${step.match}" command, got: ${command}`);
+        }
+        return step.stdout;
+      },
+      syncUp: async (localDir, remoteDir, options = {}) => {
+        uploads.push({
+          localDir,
+          remoteDir,
+          text: readFileSync(`${localDir}/environment`, "utf8"),
+          options,
+        });
+      },
+      syncDown: async () => {
+        throw new Error("syncDown is outside this test");
+      },
+      exists: async () => false,
+      interactiveArgv: () => [],
+    };
+
+    await new HerdrRuntime(transport).start(
+      "beam-test",
+      "/workspace",
+      ["claude", "--resume", "s"],
+      {
+        environment: {
+          LLM_PROXY_SESSION_TOKEN: token,
+          CLAUDE_CODE_OAUTH_TOKEN: token,
+        },
+        owner: "beam-owner-bytes",
+      },
+    );
+
+    assertEnvironmentUpload(uploads, calls, steps, token);
+  });
+
+  test("runtime environment cleanup is owner-guarded and failures surface", async () => {
+    const prepared = {
+      path: "/workspace/.beam/runtime-environment/environment",
+      cwdAbs: "/workspace",
+      owner: "beam-owner-bytes",
+    };
+    const clean = checked([{ match: "rm -f -- environment", stdout: "" }]);
+    await new HerdrRuntime(clean.transport).discardEnvironment(prepared);
+    expect(clean.calls[0]).toContain("beam-owner-bytes");
+    expect(clean.calls[0]).toContain("[ ! -e environment ] && [ ! -L environment ]");
+
+    const blocked = {
+      label: "blocked-cleanup",
+      execChecked: async () => {
+        throw new Error("cleanup refused");
+      },
+    } as unknown as Transport;
+    await expect(new HerdrRuntime(blocked).discardEnvironment(prepared)).rejects.toThrow(
+      "cleanup refused",
+    );
+  });
+
   test("start aborts before pane run when the created workspace has no pane id", async () => {
     const { transport, calls } = checked([
       { match: "printf", stdout: "" },
@@ -344,7 +473,10 @@ describe("herdr runtime", () => {
     ]);
     const runtime = new HerdrRuntime(transport);
     await expect(runtime.start("beam-test", "/workspace", ["omp"])).rejects.toThrow();
-    expect(calls).toHaveLength(3); // never typed into an unresolved pane
+    expect(calls).toHaveLength(5);
+    expect(calls.join("\n")).not.toContain("pane run");
+    expect(calls.join("\n")).toContain("server stop");
+    expect(calls.join("\n")).toContain("session delete");
   });
 
   test("alive: exit 0 maps pane count — one pane is alive, zero is absent", async () => {

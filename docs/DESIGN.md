@@ -641,9 +641,9 @@ codex scans newest-first and parses `session_meta`.
   `beam kill <id> --purge` to erase every Beam-managed remote trace.
 - **openrsync (macOS) vs GNU rsync** — conservative default flags (`-a -z`),
   per-target `rsyncFlags` override.
-- **Credentials never travel through Beam.** Beam refuses the
+- **Harness credential stores never travel through Beam.** Beam refuses the
   "copy auth.json to the server" shortcut. Raw SSH and Agent Sandbox users
-  authenticate on a reachable target via
+  normally authenticate on a reachable target via
   `beam login <target> --tool <harness>`. Box users configure credentials and
   setup in a Box Environment before creation. E2B templates, Modal images, and
   Daytona snapshots install the harness; a live handoff then accepts
@@ -653,7 +653,11 @@ codex scans newest-first and parses `session_meta`.
   Beam's purge erases only the workspace and session files it installed, not
   credentials created outside them. Best-effort auth probes surface a login
   gap early; where a harness has no file-detectable auth state, the probe is
-  absent rather than wrong.
+  absent rather than wrong. One narrow exception is resolved, short-lived
+  llm-proxy session tokens: `beam up` may deliver one through an owner-guarded
+  0600 read-once file that the launch script removes before executing the
+  coding client. Token bytes never enter state, argv, logs, workspace mirrors,
+  or the persistent script.
 - **The transport or provider credential is the blast radius.** For raw
   transports (SSH, kubectl) the sandbox boundary is whatever the operator
   configured — Beam cannot create isolation it was not given. Managed

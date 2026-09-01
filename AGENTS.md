@@ -74,9 +74,13 @@ macos.
   `rm -rf`.
 - beam ships working trees as-is (secrets included, by design). Never widen
   what is shipped or where, silently.
-- beam NEVER copies or ships harness credentials/auth state between machines.
-  Authentication happens on the target through `beam login` (interactive over
-  `ssh -t`); auth probes are best-effort detection, not a bypass.
+- beam NEVER copies or ships harness credential stores/auth files between
+  machines. Authentication normally happens on the target through `beam login`
+  (interactive over `ssh -t`); auth probes are best-effort detection, not a
+  bypass. The narrow exception is an llm-proxy session token resolved during
+  `beam up`: it crosses only in an owner-guarded 0600 read-once file, is removed
+  before the coding client launches, and never enters Beam state, argv, logs,
+  workspace mirrors, or the persistent agent-start script.
 - The transport credential is the blast radius. A new transport or sandbox
   provider MUST ship with least-privilege guidance (README) and `doctor`
   probes for its dangerous postures — an ssh transport probes root/sudo, a
