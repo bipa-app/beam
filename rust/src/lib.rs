@@ -11,3 +11,4 @@ pub mod state;
 pub mod transport;
 pub mod util;
 pub mod workspace;
+pub mod workspace_git;

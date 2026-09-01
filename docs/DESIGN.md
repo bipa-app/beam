@@ -820,20 +820,24 @@ bespoke rules), release assets built by cargo for the same four targets, all
 live handoffs drained, then the PATH flip and TypeScript deletion in one
 change.
 
-**Current port boundary.** The Rust crate now reaches through all four session
-adapters: OMP and Pi use the owner-bound, deterministic `.beam` install
-transaction and exact artifact tree; Claude Code and Codex use the no-follow
-home-store transaction. Every install and return re-proves transcript identity;
-locators follow each harness's native store identity rules. Every return stays
-under Beam-owned storage, and returned digests hash the fetched raw bytes. The
-TypeScript goldens pin adapter metadata, slugs, header rewrites, install keys,
-generated install/collection/cleanup shells, and every herdr command
-byte-exact. Hermetic local-transport tests cover locate, install, conflict
-refusal, return, cleanup, permissions, links, and artifacts. The Rust runtime
-now owns herdr's four-step start, uid-scoped socket, pane observation,
-interrupt, kill, and fish-safe attach command. Its liveness checks remain
-three-valued: only a parsed pane list or `server_not_running` proves a state;
-unknown output blocks destructive follow-ons. Workspace, provider, and command
+**Current port boundary.** The Rust crate now reaches from transport through
+workspace state. All four session adapters preserve their owner-bound install,
+return, and cleanup contracts. The workspace modules own local staging,
+containment, upload collision refusal, exact fingerprints, git materialization,
+remote collection, quarantine refs, and a return repository bound to its
+original worktree and common-dir identities before every effect. Hermetic tests
+cover foreign owners, symlink swaps, staged and unstaged git state, sparse and
+merge refusal, source drift, collection, apply, release, and purge.
+
+The Rust runtime owns herdr start, uid-scoped sockets, pane observation,
+interrupt, kill, and fish-safe attach. Liveness remains three-valued: only a
+parsed pane list or `server_not_running` proves a state. Post-pin credential
+delivery is also replayed: only allowlisted values enter an owner-guarded 0600
+file, the agent sources and removes it before launch, and failed starts remove
+both the workspace and staged credentials before becoming retryable. Captured
+subprocesses own a process group, so timeout and output-cap failures kill
+descendants that inherited their pipes. TypeScript goldens pin every generated
+workspace, git, session, and runtime shell byte-exact. Provider and command
 orchestration are not yet ported, so the TypeScript binary still owns every
 user-visible flow.
 

@@ -214,6 +214,8 @@ where
         command.stdout(Stdio::inherit());
         command.stderr(Stdio::inherit());
     } else {
+        #[cfg(unix)]
+        command.process_group(0);
         match options.input {
             RunInput::Ignore => {
                 command.stdin(Stdio::null());
@@ -291,13 +293,13 @@ async fn run_captured(
             stderr: String::from_utf8_lossy(&stderr).into_owned(),
         }),
         Ok(Err(source)) => {
-            let cleanup = terminate_child(&mut child).await.err();
+            let cleanup = terminate_process_group(&mut child).await.err();
             Err(RunError {
                 message: process_io_error(program, options.max_output_bytes, source, cleanup),
             })
         }
         Err(_) => {
-            let cleanup = terminate_child(&mut child).await.err();
+            let cleanup = terminate_process_group(&mut child).await.err();
             Err(RunError {
                 message: process_error_with_cleanup(
                     format!(
@@ -359,12 +361,44 @@ where
     Ok(captured)
 }
 
-async fn terminate_child(child: &mut Child) -> Result<(), std::io::Error> {
-    match child.start_kill() {
-        Ok(()) => {}
-        Err(source) if source.kind() == std::io::ErrorKind::InvalidInput => {}
-        Err(source) => return Err(source),
+async fn terminate_process_group(child: &mut Child) -> Result<(), std::io::Error> {
+    #[cfg(unix)]
+    {
+        let group_result = signal_process_group(child);
+        if group_result.is_ok() {
+            return wait_for_termination(child).await;
+        }
     }
+    terminate_child(child).await
+}
+
+#[cfg(unix)]
+fn signal_process_group(child: &Child) -> Result<(), std::io::Error> {
+    let child_id = child.id().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "child process has no pid for process-group cleanup",
+        )
+    })?;
+    let raw_pid = i32::try_from(child_id).map_err(|source| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("child pid does not fit the platform pid width: {source}"),
+        )
+    })?;
+    let pid = rustix::process::Pid::from_raw(raw_pid).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "child process has pid zero",
+        )
+    })?;
+    match rustix::process::kill_process_group(pid, rustix::process::Signal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(source) => Err(source.into()),
+    }
+}
+
+async fn wait_for_termination(child: &mut Child) -> Result<(), std::io::Error> {
     match timeout(TERMINATION_TIMEOUT, child.wait()).await {
         Ok(Ok(_status)) => Ok(()),
         Ok(Err(source)) => Err(source),
@@ -373,6 +407,15 @@ async fn terminate_child(child: &mut Child) -> Result<(), std::io::Error> {
             "child did not exit within 5 seconds of SIGKILL",
         )),
     }
+}
+
+async fn terminate_child(child: &mut Child) -> Result<(), std::io::Error> {
+    match child.start_kill() {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::InvalidInput => {}
+        Err(source) => return Err(source),
+    }
+    wait_for_termination(child).await
 }
 
 fn exit_code(status: ExitStatus) -> i32 {

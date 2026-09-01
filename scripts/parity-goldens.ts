@@ -71,6 +71,7 @@ import {
   type KubectlCoords,
 } from "../src/transport/kubectl.ts";
 import { ownedDestinationBlocks } from "../src/workspace.ts";
+import { workspaceGolden } from "./parity-workspace-goldens.ts";
 
 const GOLDENS_DIR = join(import.meta.dir, "..", "parity", "goldens");
 const FIXTURES_DIR = join(import.meta.dir, "..", "parity", "fixtures");
@@ -724,6 +725,7 @@ async function herdrRuntimeGolden() {
   const name = "beam-parity";
   const scripts = [
     ...(await herdrRuntimeGoldenStart(name)),
+    ...(await herdrRuntimeGoldenEnvironment(name)),
     ...(await herdrRuntimeGoldenAlive(name)),
     ...(await herdrRuntimeGoldenPeek(name)),
     ...(await herdrRuntimeGoldenControl(name)),
@@ -754,6 +756,51 @@ async function herdrRuntimeGoldenStart(name: string) {
     { label: "start-ensure-server", output: calls[1]! },
     { label: "start-workspace-create", output: calls[2]! },
     { label: "start-pane-run", output: calls[3]! },
+  ];
+}
+
+async function herdrRuntimeGoldenEnvironment(name: string) {
+  const cwdAbs = "/srv/beam/work space";
+  const owner = "record=parity\nworkspace_token=owner\n";
+  const prepare = new HerdrGoldenTransport([{ kind: "checked", output: "" }]);
+  const prepared = await new HerdrRuntime(prepare as unknown as Transport).prepareEnvironment(
+    cwdAbs,
+    { LLM_PROXY_SESSION_TOKEN: "token 'x'" },
+    owner,
+  );
+  if (prepared === undefined) {
+    throw new Error("herdr environment golden did not stage its environment");
+  }
+  const start = new HerdrGoldenTransport([
+    { kind: "checked", output: "" },
+    { kind: "checked", output: "" },
+    { kind: "checked", output: herdrWorkspaceCreatedJson("w1:p1") },
+    { kind: "checked", output: "" },
+    { kind: "checked", output: "" },
+  ]);
+  await new HerdrRuntime(start as unknown as Transport).start(
+    name,
+    cwdAbs,
+    ["omp", "--resume", "session 'x'"],
+    { preparedEnvironment: prepared },
+  );
+  const discard = new HerdrGoldenTransport([{ kind: "checked", output: "" }]);
+  await new HerdrRuntime(discard as unknown as Transport).discardEnvironment(prepared);
+  const prepareCalls = prepare.done();
+  const startCalls = start.done();
+  const discardCalls = discard.done();
+  const calls = [...prepareCalls, ...startCalls, ...discardCalls];
+  if (calls.some((call) => call.includes("token 'x'"))) {
+    throw new Error("herdr environment golden leaked credentials into a command");
+  }
+  return [
+    { label: "environment-secure", output: prepareCalls[0]! },
+    { label: "environment-start-upload", output: startCalls[0]! },
+    { label: "environment-start-ensure-server", output: startCalls[1]! },
+    { label: "environment-start-workspace-create", output: startCalls[2]! },
+    { label: "environment-start-pane-run", output: startCalls[3]! },
+    { label: "environment-consume", output: startCalls[4]! },
+    { label: "environment-discard", output: discardCalls[0]! },
   ];
 }
 
@@ -858,6 +905,8 @@ class HerdrGoldenTransport {
     throw new Error(`expected exec herdr call, got checked: ${command}`);
   }
 
+  async syncUp(): Promise<void> {}
+
   done(): readonly string[] {
     if (this.steps.length !== 0) {
       throw new Error(`herdr golden left ${this.steps.length} scripted calls unused`);
@@ -887,6 +936,7 @@ async function main(): Promise<void> {
     ["ssh-transport.json", serialize(sshTransportGolden())],
     ["kubectl-transport.json", serialize(kubectlTransportGolden())],
     ["herdr-runtime.json", serialize(await herdrRuntimeGolden())],
+    ["workspace.json", serialize(await workspaceGolden())],
     ["session-adapters.json", serialize(sessionAdapterGolden())],
   ]);
   let drifted = false;
