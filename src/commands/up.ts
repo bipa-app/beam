@@ -41,8 +41,12 @@ import {
   type BeamRecord,
 } from "../state.ts";
 import { createProvider, type SandboxProvider } from "../provider/index.ts";
+import {
+  resolveProviderCredentialEnvironment,
+  type ProviderCredentialEnvironment,
+} from "../provider-credentials.ts";
 import type { Transport } from "../transport/index.ts";
-import { HerdrRuntime } from "../runtime/herdr.ts";
+import { HerdrRuntime, RetryableRuntimeStartError } from "../runtime/herdr.ts";
 import { probePrivilege } from "../security.ts";
 import {
   assertContainedWorkspace,
@@ -427,12 +431,14 @@ async function upUnderOperationLock(o: UpLockedOptions): Promise<void> {
       wtGit,
     });
     wtGit = pinned.wtGit;
+    const providerEnvironment = await upResolveProviderEnvironment(pinned.detected);
     const screened = await upProvisionAndScreen({
       env: o.env,
       record,
       spec: pinned.spec,
       provider: pinned.provider,
       reused: o.reused,
+      providerEnvironment,
       targetName: o.targetName,
       requestedKickoff: o.values.message,
     });
@@ -457,6 +463,7 @@ async function upUnderOperationLock(o: UpLockedOptions): Promise<void> {
       spec: pinned.spec,
       t: screened.t,
       runtime: screened.runtime,
+      providerEnvironment,
       detected: pinned.detected,
       wtGit,
       kickoff,
@@ -588,6 +595,13 @@ async function upPinSessionIdentity(o: {
   return detected;
 }
 
+/** Resolve capacity only after a reused handoff's effective session is pinned. */
+async function upResolveProviderEnvironment(
+  detected: DetectedSession | undefined,
+): Promise<ProviderCredentialEnvironment> {
+  return resolveProviderCredentialEnvironment(detected?.adapter.tool);
+}
+
 /**
  * Git/plain layout is part of the return contract from the moment it is
  * pinned, before provisioning. Pivoting either way can strand shipped Git
@@ -640,6 +654,7 @@ type UpProvisionScreenOptions = {
   spec: TargetSpec;
   provider: SandboxProvider;
   reused: boolean;
+  providerEnvironment: ProviderCredentialEnvironment;
   targetName: string;
   /** The explicit `--message` of THIS invocation (never the stored one). */
   requestedKickoff: string | undefined;
@@ -680,6 +695,7 @@ async function upProvisionAndScreen(
       t,
       runtime,
       agentAlive,
+      providerEnvironment: o.providerEnvironment,
       targetName: o.targetName,
       requestedKickoff: o.requestedKickoff,
     });
@@ -762,6 +778,7 @@ async function upRestartRetainedAgent(o: {
   record: BeamRecord;
   spec: TargetSpec;
   t: Transport;
+  providerEnvironment: ProviderCredentialEnvironment;
   runtime: HerdrRuntime;
   agentAlive: boolean;
   targetName: string;
@@ -791,9 +808,10 @@ async function upRestartRetainedAgent(o: {
   }
   // Retained handoff whose agent exited: when the ship journaled its
   // resume argv, restart the agent IN PLACE on the retained remote
-  // generation — zero sync, zero install, not one local byte shipped
-  // over the retained work. A fresh ship requires retiring the
-  // handoff explicitly.
+  // generation — zero workspace/session sync and zero install. A freshly
+  // resolved runtime credential may cross through the private read-once
+  // environment channel; no user or session byte is re-shipped over the
+  // retained work. A fresh ship requires retiring the handoff explicitly.
   if (record.resumeArgv && record.resumeArgv.length > 0 && isRemoteCwdResolved(record)) {
     if (record.workspaceToken === undefined) {
       throw new Error(
@@ -804,10 +822,13 @@ async function upRestartRetainedAgent(o: {
     await assertContainedWorkspace(o.t, targetRoot(o.spec), record.remoteCwd, {
       owner: workspaceOwnerContent(record.id, record.workspaceToken),
     });
-    await o.runtime.start(record.runtimeSession, record.remoteCwd, record.resumeArgv);
+    await o.runtime.start(record.runtimeSession, record.remoteCwd, record.resumeArgv, {
+      environment: o.providerEnvironment,
+      owner: workspaceOwnerContent(record.id, record.workspaceToken),
+    });
     console.log(
-      `\nrestarted handoff ${record.id}'s agent in place on ${o.targetName} — nothing was ` +
-        `re-shipped`,
+      `\nrestarted handoff ${record.id}'s agent in place on ${o.targetName} — workspace and ` +
+        `session were untouched`,
     );
     console.log(`  (local changes stay local: beam down ${record.id} collects the remote work;`);
     console.log(`   retire with beam kill ${record.id} --purge before shipping fresh)`);
@@ -830,6 +851,7 @@ type UpExecuteShipOptions = {
   t: Transport;
   runtime: HerdrRuntime;
   detected: DetectedSession | undefined;
+  providerEnvironment: ProviderCredentialEnvironment;
   wtGit: MaterializedWorktreeGit | undefined;
   kickoff: string | undefined;
   reused: boolean;
@@ -847,6 +869,7 @@ type UpShipContext = {
   env: BeamEnv;
   id: string;
   t: Transport;
+  providerEnvironment: ProviderCredentialEnvironment;
   root: string;
   remoteCwd: string;
   owner: string;
@@ -877,6 +900,7 @@ async function upExecuteShip(o: UpExecuteShipOptions): Promise<void> {
     env: o.env,
     id: o.record.id,
     t: o.t,
+    providerEnvironment: o.providerEnvironment,
     root,
     remoteCwd: workspace.remoteCwd,
     owner: workspace.owner,
@@ -1837,12 +1861,62 @@ async function upInstallSessionAndStart(
   // starts. A mismatch refuses; the start never runs.
   await assertContainedWorkspace(ship.t, ship.root, ship.remoteCwd, { owner: ship.owner });
   if (o.noStart) return false;
-  // Journal `starting` BEFORE runtime.start runs: a crash between the
-  // start and the `up` flip leaves a status telling the retry that an
-  // agent may already be running — finalize it, never re-ship over it.
-  updateRecord(ship.env, ship.id, { status: "starting", resumeArgv: installed.resumeArgv });
-  await o.runtime.start(o.record.runtimeSession, ship.remoteCwd, installed.resumeArgv);
+  await upStartInstalledSession(
+    ship,
+    o.runtime,
+    o.record.runtimeSession,
+    installed.resumeArgv,
+  );
   return true;
+}
+
+/** Stage credentials before the crash-sensitive `starting` journal transition. */
+async function upStartInstalledSession(
+  ship: UpShipContext,
+  runtime: HerdrRuntime,
+  runtimeSession: string,
+  resumeArgv: string[],
+): Promise<void> {
+  // A failed upload while `provisioning` leaves no pane for recovery to
+  // misclassify as a running coding client.
+  const preparedEnvironment = await runtime.prepareEnvironment(
+    ship.remoteCwd,
+    ship.providerEnvironment,
+    ship.owner,
+  );
+  try {
+    // Journal `starting` BEFORE runtime.start runs: a crash between the
+    // start and the `up` flip leaves a status telling the retry that an
+    // agent may already be running — finalize it, never re-ship over it.
+    updateRecord(ship.env, ship.id, { status: "starting", resumeArgv });
+  } catch (error) {
+    try {
+      await runtime.discardEnvironment(preparedEnvironment);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "starting journal and runtime credential cleanup both failed",
+      );
+    }
+    throw error;
+  }
+  try {
+    await runtime.start(runtimeSession, ship.remoteCwd, resumeArgv, {
+      preparedEnvironment,
+      owner: ship.owner,
+    });
+  } catch (error) {
+    if (!(error instanceof RetryableRuntimeStartError)) throw error;
+    try {
+      updateRecord(ship.env, ship.id, { status: "provisioning" });
+    } catch (stateError) {
+      throw new AggregateError(
+        [error, stateError],
+        "runtime start was cleaned up but the retryable phase could not be journaled",
+      );
+    }
+    throw error;
+  }
 }
 
 /**

@@ -1096,14 +1096,12 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
   }
 
   /**
-   * Force the REAL crash-after-land window — nothing hand-built: run a
+   * Force the REAL failure-after-land window — nothing hand-built: run a
    * full sessioned up whose agent start fails (a broken herdr planted on
    * PATH; `pane list` still emits the machine-readable server_not_running
-   * error so the retry's liveness probe answers instead of throwing),
-   * leaving `starting` + the pending journal + its staged bundle exactly
-   * as the crashed attempt wrote them, then demote the status to
-   * `provisioning` — the same record shape a crash between the pointer
-   * landing and the `up` flip leaves behind.
+   * error). The observed failure proves the runtime absent and resets the
+   * record to `provisioning`, while preserving the pending journal and
+   * staged bundle for an exact retry.
    */
   async function crashAfterLand(f: SessFixture): Promise<BeamRecord> {
     writeFileSync(
@@ -1118,9 +1116,8 @@ describe.skipIf(!HAVE_DEPS)("git ship crash phases with a session enabled", () =
     chmodSync(join(f.fakeBin, "herdr"), 0o755);
     await expect(cmdUp([])).rejects.toThrow();
     const rec = theRecord();
-    expect(rec.status).toBe("starting"); // install completed; the start crashed
+    expect(rec.status).toBe("provisioning"); // failed runtime was removed; exact retry is safe
     expect(rec.shipPending?.session?.stage).toBeDefined(); // journal + stage intact
-    updateRecord(resolveEnv(), rec.id, { status: "provisioning" });
     return theRecord();
   }
 

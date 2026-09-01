@@ -54,6 +54,12 @@ export interface RunOptions {
    * output.
    */
   maxOutputBytes?: number;
+  /**
+   * Kill a captured non-interactive child when it exceeds this wall-clock
+   * budget. The caller still owns whether a timeout is fatal or a
+   * best-effort fallback.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -102,41 +108,86 @@ async function captureStream(
   return { text: Buffer.concat(chunks, capturedBytes).toString("utf8"), overflowed: false };
 }
 
+interface KillableSubprocess {
+  readonly pid: number;
+  kill(signal: NodeJS.Signals): void;
+}
+
+/** Captured commands own a process group so timeouts also close inherited pipes. */
+function killCapturedProcess(proc: KillableSubprocess): void {
+  if (process.platform === "win32") {
+    proc.kill("SIGKILL");
+    return;
+  }
+  try {
+    process.kill(-proc.pid, "SIGKILL");
+  } catch {
+    // If setsid or the group signal lost a race, still kill the direct child.
+    proc.kill("SIGKILL");
+  }
+}
+
 /** Run an argv. Never throws on nonzero exit; inspect `code`. */
 export async function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0) {
     throw new Error(`run: maxOutputBytes must be a positive integer, got ${maxOutputBytes}`);
   }
+  if (
+    opts.timeoutMs !== undefined &&
+    (!Number.isSafeInteger(opts.timeoutMs) || opts.timeoutMs <= 0)
+  ) {
+    throw new Error(`run: timeoutMs must be a positive integer, got ${opts.timeoutMs}`);
+  }
+  if (opts.interactive && opts.timeoutMs !== undefined) {
+    throw new Error("run: timeoutMs is not supported for interactive commands");
+  }
   const base = opts.baseEnv ?? process.env;
   const stdinPipe =
     opts.stdinBytes ?? (opts.stdinText !== undefined ? Buffer.from(opts.stdinText) : "ignore");
+  const ownsProcessGroup = opts.timeoutMs !== undefined;
   const proc = Bun.spawn(argv, {
     cwd: opts.cwd,
     env: opts.env ? { ...base, ...opts.env } : base,
     stdin: opts.interactive ? "inherit" : stdinPipe,
     stdout: opts.interactive ? "inherit" : "pipe",
     stderr: opts.interactive ? "inherit" : "pipe",
+    detached: ownsProcessGroup,
   });
   if (opts.interactive) {
     return { code: await proc.exited, stdout: "", stderr: "" };
   }
   // Drain BOTH pipes concurrently before awaiting exit: a child that fills
   // one pipe buffer while Beam waits on the other (or on exit) deadlocks.
-  const killChild = () => proc.kill("SIGKILL");
+  let timedOut = false;
+  const killChild = () =>
+    ownsProcessGroup ? killCapturedProcess(proc) : proc.kill("SIGKILL");
+  const timeout =
+    opts.timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          killChild();
+        }, opts.timeoutMs);
   let stdout: StreamCapture;
   let stderr: StreamCapture;
+  let code: number;
   try {
-    [stdout, stderr] = await Promise.all([
+    [stdout, stderr, code] = await Promise.all([
       captureStream(proc.stdout as ReadableStream<Uint8Array>, maxOutputBytes, killChild),
       captureStream(proc.stderr as ReadableStream<Uint8Array>, maxOutputBytes, killChild),
+      proc.exited,
     ]);
   } catch (err) {
     killChild();
     await proc.exited;
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
-  const code = await proc.exited;
+  if (timedOut) {
+    throw new Error(`command timed out after ${opts.timeoutMs}ms: ${argv[0]}`);
+  }
   if (stdout.overflowed || stderr.overflowed) {
     const streams = [stdout.overflowed ? "stdout" : "", stderr.overflowed ? "stderr" : ""]
       .filter((name) => name !== "")
