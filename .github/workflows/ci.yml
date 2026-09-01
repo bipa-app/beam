@@ -64,6 +64,20 @@ jobs:
         working-directory: rust
     steps:
       - uses: actions/checkout@v4
+      - name: Install herdr (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL -o /tmp/herdr https://github.com/herdrdev/herdr/releases/download/v0.8.0/herdr-linux-x86_64
+          echo "b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28  /tmp/herdr" \
+            | sha256sum --check
+          sudo install -m 0755 /tmp/herdr /usr/local/bin/herdr
+      - name: Install herdr (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -fsSL -o /tmp/herdr https://github.com/herdrdev/herdr/releases/download/v0.8.0/herdr-macos-aarch64
+          echo "d53a9f93fccfdfcc55632927bf51002f5add0aa7990bcdf508ffbd84ac658178  /tmp/herdr" \
+            | shasum --algorithm 256 --check
+          sudo install -m 0755 /tmp/herdr /usr/local/bin/herdr
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- --deny warnings
       - run: cargo test --locked
