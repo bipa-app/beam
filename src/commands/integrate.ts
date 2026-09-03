@@ -355,10 +355,7 @@ function assertLocalWorkspaceIdentity(record: BeamRecord): void {
     );
   }
   const current = statSync(record.localCwd, { bigint: true });
-  if (
-    current.dev.toString() !== record.localCwdId.dev ||
-    current.ino.toString() !== record.localCwdId.ino
-  ) {
+  if (current.ino.toString() !== record.localCwdId.ino) {
     throw new CliError(
       "local_workspace_replaced",
       `${record.localCwd} is not the physical workspace that handoff ${record.id} shipped`,

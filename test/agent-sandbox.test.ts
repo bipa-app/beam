@@ -37,7 +37,12 @@ import { AgentSandboxProvider } from "../src/provider/agent-sandbox.ts";
 import type { AgentSandboxState, SandboxState } from "../src/provider/types.ts";
 import { HerdrRuntime } from "../src/runtime/herdr.ts";
 import { acquireOperationLock, loadState, updateRecord, type BeamRecord } from "../src/state.ts";
-import { KubectlTransport, markerWalkBlocks, syncMarkerFor } from "../src/transport/kubectl.ts";
+import {
+  KubectlTransport,
+  createShipArchive,
+  markerWalkBlocks,
+  syncMarkerFor,
+} from "../src/transport/kubectl.ts";
 import {
   BEAM_GITPTR_EXCLUDE,
   BEAM_RESERVED_EXCLUDE,
@@ -354,6 +359,42 @@ function latestReturnWorkspace(beamDir: string, recordId: string): string {
   const txn = readdirSync(parent).sort().at(-1);
   if (txn === undefined) throw new Error(`missing return stage for ${recordId}`);
   return join(parent, txn, "workspace");
+}
+
+/** Ceiling on entries read from a captured ship archive; fixtures hold a handful. */
+const MAX_CAPTURED_TAR_ENTRIES = 4096;
+
+/**
+ * Entry names of a gzipped tar, read from the raw ustar headers — never
+ * through a local `tar -t`, which on macOS folds AppleDouble `._` entries
+ * into their siblings and hides exactly what the archive contract must see.
+ * pax extended headers (`x`/`g`) carry no entry of their own and are skipped.
+ */
+function tarEntryNames(archive: string): string[] {
+  const bytes = Bun.gunzipSync(readFileSync(archive));
+  const names: string[] = [];
+  let offset = 0;
+  while (offset + 512 <= bytes.length) {
+    if (names.length === MAX_CAPTURED_TAR_ENTRIES) {
+      throw new Error(`captured archive ${archive} exceeds ${MAX_CAPTURED_TAR_ENTRIES} entries`);
+    }
+    const header = bytes.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break; // end-of-archive zero block
+    const field = (start: number, length: number): string => {
+      const raw = header.subarray(start, start + length);
+      const end = raw.indexOf(0);
+      return Buffer.from(end === -1 ? raw : raw.subarray(0, end)).toString("utf8");
+    };
+    const sizeBytes = Number.parseInt(field(124, 12).trim() || "0", 8);
+    const typeFlag = field(156, 1);
+    const prefix = field(345, 155);
+    const name = field(0, 100);
+    if (typeFlag !== "x" && typeFlag !== "g") {
+      names.push(prefix === "" ? name : `${prefix}/${name}`);
+    }
+    offset += 512 + Math.ceil(sizeBytes / 512) * 512;
+  }
+  return names;
 }
 
 function makeCluster(): Cluster {
@@ -1398,6 +1439,35 @@ describe("kubectl transport", () => {
       expect(existsSync(join(local, "keep.env"))).toBe(true);
       expect(readFileSync(join(local, "hello.txt"), "utf8")).toBe("hello\n");
       expect(existsSync(join(local, ".beam"))).toBe(false);
+    },
+  );
+
+  test(
+    "the ship archive holds exactly the staged entries: extended attributes on the staging " +
+      "copies never become AppleDouble ._ siblings (#37)",
+    async () => {
+      const c = makeCluster();
+      const staging = join(c.state, "staging");
+      mkdirSync(join(staging, "src"), { recursive: true });
+      writeFileSync(join(staging, "hello.txt"), "hello\n");
+      writeFileSync(join(staging, "src", "deep.txt"), "deep\n");
+      // macOS 14+ stamps com.apple.provenance on every file and directory
+      // a tracked process creates — the staging copies included. Any xattr
+      // reproduces the packing, and macOS ships the `xattr` tool; elsewhere
+      // the archive contract is checked over a plain tree.
+      if (Bun.which("xattr") !== null) {
+        for (const path of [staging, join(staging, "hello.txt"), join(staging, "src")]) {
+          await runChecked(["xattr", "-w", "user.beam-test", "1", path]);
+        }
+      }
+      const archive = join(c.state, "ship.tar.gz");
+      await createShipArchive(staging, archive, false);
+      expect(tarEntryNames(archive).sort()).toEqual([
+        "./",
+        "./hello.txt",
+        "./src/",
+        "./src/deep.txt",
+      ]);
     },
   );
 

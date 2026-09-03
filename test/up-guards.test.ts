@@ -227,6 +227,17 @@ describe.skipIf(!HAVE_DEPS)(
       expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
     }, ROUND_TRIP_TIMEOUT_MS);
 
+    test("--no-session with a kickoff refuses up front: no agent could receive it", async () => {
+      // Refused at argument parsing, before the reservation or any remote
+      // effect: the record and the retained remote are untouched (#37).
+      const before = JSON.stringify(theRecord());
+      await expect(cmdUp(["--no-session", "-m", "go"])).rejects.toThrow(
+        /--no-session ships the workspace only.*a kickoff message \(-m\) has nothing to receive/,
+      );
+      expect(JSON.stringify(theRecord())).toBe(before);
+      expect(existsSync(join(remoteCwd, "not-shipped.txt"))).toBe(false);
+    }, ROUND_TRIP_TIMEOUT_MS);
+
     test(
       "a NEW --message on a completed handoff refuses instead of silently dropping it",
       async () => {

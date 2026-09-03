@@ -294,8 +294,13 @@ ceilings, verifies SHA-256, and smoke-runs the binary before replacing
    below the tip as `refs/stash@{n}` pseudo-entries) rides inside the
    payload. The persisted ship identity
    (`wtGit`) records optional HEAD, branch, the absolute common and worktree
-   Git dirs, bigint-safe device+inode pairs for both dirs, create-only
-   identity tokens, and the ref-snapshot digest.
+   Git dirs, bigint-safe inode numbers for both dirs, create-only identity
+   tokens, and the ref-snapshot digest. The device number is deliberately
+   not part of the identity: APFS, btrfs subvolumes, NFS, and overlay mounts
+   assign `st_dev` at mount time, so a reboot between `beam up` and `beam
+   down` would refuse a valid return (#17). The inode pins the directory,
+   the 256-bit create-only token pins the repository behind it; a same-path
+   directory with both matching can only be a copy of that repository.
    Fresh materialization is fatal-first: it runs before any remote side
    effect, so a worktree whose Git state cannot travel never half-ships;
    sparse-checkout and skip-worktree layouts are refused (the payload would
@@ -318,8 +323,10 @@ ceilings, verifies SHA-256, and smoke-runs the binary before replacing
    The RETURN (`beam down`, `src/workspace-git.ts` + `src/workspace.ts`)
    makes remote Git state lossless WITHOUT ever mutating the live local
    worktree or checkout, in this order: (1) fail-closed local identity
-   guards BEFORE any remote read — both Git directory paths, device+inode
-   identities, and create-only tokens must still match the ship; (2) the
+   guards BEFORE any remote read — both Git directory paths, inode
+   identities, and create-only tokens must still match the ship, and the
+   refusal names which pin failed (a changed inode is a recreated
+   directory, a changed token is a replaced repository); (2) the
    remote `.git` is collected into a local temp quarantine and proven to be
    ONE stable remote snapshot (byte fingerprint before == after == over the
    collected copy, with any foreign Git lock refusing the probe); links and
@@ -392,7 +399,7 @@ ceilings, verifies SHA-256, and smoke-runs the binary before replacing
    durable roots at `meta/object-pins/<oid>` — so the wholesale import of
    (4) survives `git reflog expire --expire=now --all` + `git gc
    --prune=now`. All of it is BOUND to the proven directories: the process
-   enters the worktree git dir (device+inode plus create-only token proven
+   enters the worktree git dir (inode plus create-only token proven
    through the handle itself), every effect resolves relative to that cwd
    or through `--git-dir=.`, and every common-repository effect runs inside
    a proof-gated transition into the proven common dir — a same-path
@@ -420,7 +427,7 @@ ceilings, verifies SHA-256, and smoke-runs the binary before replacing
    tree fingerprint, then copies that proven return to a fresh immutable
    local source. It itemizes the exact rsync operation before confirmation.
    A non-empty apply proceeds only while the destination directory's
-   device/inode and its filtered full-tree digest still match the completed
+   inode and its filtered full-tree digest still match the completed
    `beam up`; a prompt causes that base proof to run again. The apply uses the
    manifest's exact excludes and deletion license, then an empty post-apply
    dry run proves convergence. Repeated integration is an empty, idempotent

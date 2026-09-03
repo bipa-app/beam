@@ -1565,9 +1565,14 @@ describe.skipIf(!HAVE_DEPS)(
           expect(readFileSync(join(rc, "evil.txt"), "utf8")).toBe("foreign\n");
 
           // Drop the collision: the retry publishes run.sh, but the foreign
-          // extra still fails the strict stage-vs-live proof — byte-intact.
+          // extra still fails the strict stage-vs-live proof — byte-intact —
+          // and the refusal NAMES the extra (#37: two bare counts sent an
+          // operator on an hour-long hunt).
           rmSync(join(rc, "run.sh"));
-          await expect(cmdUp(["--no-session"])).rejects.toThrow(/does not match the staged mirror/);
+          await expect(cmdUp(["--no-session"])).rejects.toThrow(
+            "does not match the staged mirror (7 vs 6 entries): " +
+              "1 on the target but not in the mirror: ./evil.txt —",
+          );
           expect(readFileSync(join(rc, "run.sh"), "utf8")).toBe("#!/bin/sh\necho hi\n");
           expect(readFileSync(join(rc, "evil.txt"), "utf8")).toBe("foreign\n");
 

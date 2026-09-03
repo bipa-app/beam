@@ -62,7 +62,10 @@ import {
   stageWorkspaceShip,
   workspaceOwnerContent,
   remoteWorkspaceTreeFingerprint,
+  remoteWorkspaceTreeMismatch,
+  describeWorkspaceMismatch,
   stagedWorkspaceTreeFingerprint,
+  type WorkspaceTreeFingerprint,
   publishWorkspaceUploadStage,
   remoteWorkspaceUploadStagePresent,
   removeWorkspaceUploadStage,
@@ -94,10 +97,16 @@ usage: beam up [options]
   --tool <omp|pi|claude|codex>  harness to hand off (default: auto-detect newest)
   --session <ref>         session id/filename prefix (default: newest for cwd)
   --message, -m <text>    kickoff prompt so the agent starts working unattended
-  --no-session            ship the workspace only
+  --no-session            ship the workspace only: no session travels and no agent
+                          starts, so -m is refused with it
   --no-start              install but do not start the remote agent
   --verbose, -v           stream rsync progress
   --allow-large           ship even a mirror past the size ceiling (skips the preflight)
+
+excludes: .beamignore in the workspace (rsync patterns, one per line) plus the
+  target's config excludes; \`.git\` never rides the mirror. The mirror refuses
+  past 2 GiB (build artifacts such as target/ or node_modules/ belong in
+  .beamignore) unless --allow-large is given.
 `;
 
 /** Parsed `beam up` CLI values, threaded to the phase helpers that need them. */
@@ -145,10 +154,10 @@ export async function cmdUp(args: string[]): Promise<void> {
   const env = resolveEnv();
   const config = loadConfig(env);
   const localCwd = process.cwd();
-  // Pure local checks first — layout, reserved names, mirror size — so a
-  // doomed ship fails before the reservation claims a (possibly exclusive)
-  // target or any remote effect runs.
-  await upLocalPreflights({ localCwd, config, allowLarge: values["allow-large"] === true });
+  // Pure local checks first — flag conflicts, layout, reserved names,
+  // mirror size — so a doomed ship fails before the reservation claims a
+  // (possibly exclusive) target or any remote effect runs.
+  await upLocalPreflights({ localCwd, config, values });
 
   const resolved = resolveUpTarget({ env, config, localCwd, requested: values.target });
   const detected = values["no-session"]
@@ -199,19 +208,29 @@ const MAX_SHIP_BYTES = 2 * 1024 ** 3;
 
 /**
  * Pure local preflights, BEFORE the target reservation and any remote
- * effect: an unshippable Git layout, a reserved-name collision, or an
- * oversized mirror fails here — not after a (possibly exclusive) target is
- * claimed or hours of staging and transfer are sunk. `--allow-large` is
- * the explicit license for a genuinely huge ship and skips the size walk.
+ * effect: a contradictory flag pair, an unshippable Git layout, a
+ * reserved-name collision, or an oversized mirror fails here — not after a
+ * (possibly exclusive) target is claimed or hours of staging and transfer
+ * are sunk. `--allow-large` is the explicit license for a genuinely huge
+ * ship and skips the size walk.
  */
 async function upLocalPreflights(o: {
   localCwd: string;
   config: Config;
-  allowLarge: boolean;
+  values: UpValues;
 }): Promise<void> {
+  // `--no-session` starts no agent, so a kickoff would vanish silently and
+  // the ship would look dead from the outside (#37).
+  if (o.values["no-session"] && o.values.message !== undefined) {
+    throw new Error(
+      `beam up: --no-session ships the workspace only — no session travels and no agent ` +
+        `starts, so a kickoff message (-m) has nothing to receive it. Drop --no-session to ` +
+        `resume this workspace's session with the kickoff, or drop -m to ship only`,
+    );
+  }
   assertShippableGitLayout(o.localCwd);
   await assertNoLocalReservedCollision(o.localCwd);
-  if (o.allowLarge) return;
+  if (o.values["allow-large"]) return;
   const shipBytes = await assertShipSizeBounded(o.localCwd, gatherExcludes(o.localCwd, o.config), {
     bytesMax: MAX_SHIP_BYTES,
   });
@@ -334,7 +353,7 @@ function reserveUpTarget(o: UpReserveOptions): { record: BeamRecord; reused: boo
         sessionFile: o.detected?.session.file,
         artifactsDir: o.detected?.session.artifactsDir,
         localCwd: o.localCwd,
-        localCwdId: { dev: cwd.dev.toString(), ino: cwd.ino.toString() },
+        localCwdId: { ino: cwd.ino.toString() },
         // Candidate until `pwd` resolves it.
         remoteCwd: `${root}/${remoteWorkspaceName(o.localCwd)}`,
         remoteCwdResolved: false,
@@ -1522,18 +1541,51 @@ async function upConvergePendingWorkspace(
   await publishWorkspaceUploadStage(ship.t, ship.remoteCwd, pending.workspaceDigest, ship.owner);
   const remoteWs = await remoteWorkspaceTreeFingerprint(ship.t, ship.remoteCwd);
   if (remoteWs.digest !== stagedWs.digest || remoteWs.entries !== stagedWs.entries) {
-    throw new Error(
-      `handoff ${ship.id}: the uploaded workspace does not match the staged mirror ` +
-        `(${remoteWs.entries} vs ${stagedWs.entries} entries) — something else is writing in ` +
-        `${ship.remoteCwd}; refusing to continue (nothing was deleted). Inspect the target, ` +
-        `then retry beam up or retire the handoff (beam kill ${ship.id} --purge)`,
-    );
+    throw await upWorkspaceMismatchError(ship, {
+      remoteWs,
+      stagedWs,
+      shipStageDir: o.shipStageDir,
+    });
   }
   // Proof first, then the journal flip, then the reap: a crash between
   // any two leaves a state the next retry converges from.
   updateRecord(ship.env, ship.id, { shipPending: { ...pending, workspaceInstalled: true } });
   await removeWorkspaceUploadStage(ship.t, ship.remoteCwd, pending.workspaceDigest, ship.owner);
   return true;
+}
+
+/**
+ * The strict-proof refusal, naming WHICH entries differ. Two counts alone
+ * sent one operator on an hour-long hunt (#37: every extra was an
+ * AppleDouble `._` sibling). The diagnostic re-reads the target on the
+ * failure path only; if that read fails too, the refusal still carries
+ * the counts plus the diagnostic's own error, never a masked cause.
+ */
+async function upWorkspaceMismatchError(
+  ship: UpShipContext,
+  o: {
+    remoteWs: WorkspaceTreeFingerprint;
+    stagedWs: WorkspaceTreeFingerprint;
+    shipStageDir: string;
+  },
+): Promise<Error> {
+  let detail: string;
+  try {
+    detail = describeWorkspaceMismatch(
+      await remoteWorkspaceTreeMismatch(ship.t, ship.remoteCwd, o.shipStageDir),
+    );
+  } catch (error) {
+    detail = `the entry listing could not be read back: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  }
+  return new Error(
+    `handoff ${ship.id}: the uploaded workspace does not match the staged mirror ` +
+      `(${o.remoteWs.entries} vs ${o.stagedWs.entries} entries): ${detail} — something else ` +
+      `is writing in ${ship.remoteCwd}, or an earlier attempt left entries behind; refusing ` +
+      `to continue (nothing was deleted). Inspect the target, then retry beam up or retire ` +
+      `the handoff (beam kill ${ship.id} --purge)`,
+  );
 }
 
 /**
@@ -1651,12 +1703,11 @@ async function upUploadFreshGeneration(
   // the extra preserved.
   const remoteWs = await remoteWorkspaceTreeFingerprint(ship.t, ship.remoteCwd);
   if (remoteWs.digest !== stagedWs.digest || remoteWs.entries !== stagedWs.entries) {
-    throw new Error(
-      `handoff ${ship.id}: the uploaded workspace does not match the staged mirror ` +
-        `(${remoteWs.entries} vs ${stagedWs.entries} entries) — something else is writing in ` +
-        `${ship.remoteCwd}; refusing to continue (nothing was deleted). Inspect the target, ` +
-        `then retry beam up or retire the handoff (beam kill ${ship.id} --purge)`,
-    );
+    throw await upWorkspaceMismatchError(ship, {
+      remoteWs,
+      stagedWs,
+      shipStageDir: o.shipStageDir,
+    });
   }
   // The publish is proven: flip `workspaceInstalled` (a retry may now skip
   // the upload entirely and re-prove the live root against the journaled
@@ -1966,8 +2017,15 @@ function upPromoteToUp(
       console.log(`  note:    no kickoff message — the agent idles until you attach or re-up -m`);
     }
   } else {
+    // Never silent: a ship that started nothing must say so, or it looks
+    // dead from the outside (#37).
     if (o.detected) {
       console.log(`  agent not started (--no-start); resume manually in ${ship.remoteCwd}`);
+    } else {
+      console.log(
+        `  agent not started (--no-session): no session shipped; re-up without --no-session ` +
+          `to resume one`,
+      );
     }
   }
   console.log(`  return:  beam down ${ship.id}`);

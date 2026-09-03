@@ -870,7 +870,7 @@ async function makeReturnFixture(): Promise<ReturnFixture> {
 /**
  * Ship-time identity for a worktree, built exactly the way a fresh `beam up`
  * persists it: HEAD/branch when present, both git-dir pathnames, and the
- * device+inode identity of each dir as decimal strings.
+ * inode identity of each dir as a decimal string.
  */
 async function shipInfoFor(wt: string): Promise<WtGitShipInfo> {
   const commonDir = resolve(wt, (await git(wt, "rev-parse", "--git-common-dir")).stdout.trim());
@@ -879,7 +879,7 @@ async function shipInfoFor(wt: string): Promise<WtGitShipInfo> {
   const branch = await run(["git", "-C", wt, "symbolic-ref", "--quiet", "HEAD"]);
   const idOf = (p: string) => {
     const st = statSync(p, { bigint: true });
-    return { dev: String(st.dev), ino: String(st.ino) };
+    return { ino: String(st.ino) };
   };
   const tokenAt = (dir: string, name: string, fill: string): string => {
     const path = join(dir, name);
@@ -2267,13 +2267,14 @@ describe.skipIf(!HAVE_DEPS)("cmdDown refuses same-path repository replacement " 
       expect(record.wtGit!.commonDir).toBe(join(localCwd, ".git"));
       expect(record.wtGit!.worktreeGitDir).toBe(join(localCwd, ".git"));
 
-      // Ship-time identity: device+inode of the (standard) git dir ride the
-      // record as JSON STRINGS — number-typed values would round through
-      // JSON floats and silently lose precision on 64-bit inodes.
+      // Ship-time identity: the inode of the (standard) git dir rides the
+      // record as a JSON STRING — a number-typed value would round through
+      // JSON floats and silently lose precision on 64-bit inodes. The
+      // device number is NOT pinned: it changes across reboots (#17).
       const gitDirStat = statSync(join(localCwd, ".git"), { bigint: true });
       const shipJson = JSON.stringify(record.wtGit);
       expect(shipJson).toContain(`"${gitDirStat.ino}"`);
-      expect(shipJson).toContain(`"${gitDirStat.dev}"`);
+      expect(shipJson).not.toContain(`"${gitDirStat.dev}"`);
 
       // Remote agent work a collect would bring home — it must NOT move into
       // the impostor.
@@ -2323,6 +2324,58 @@ describe.skipIf(!HAVE_DEPS)("cmdDown refuses same-path repository replacement " 
   );
 
   test(
+    "a record whose pinned device number no longer matches (reboot, remount) still " +
+      "collects: the inode and marker token are the identity, the device is not",
+    async () => {
+      const base = realpathSync(mkdtempSync(join(tmpdir(), "beam-wtdev-")));
+      const localCwd = join(base, "work");
+      mkdirSync(localCwd);
+      await git(localCwd, "init", "-q", "-b", "main");
+      writeFileSync(join(localCwd, "tracked.txt"), "original checkout\n");
+      await git(localCwd, "add", "-A");
+      await git(localCwd, "commit", "-q", "-m", "original base");
+
+      process.chdir(localCwd);
+      await cmdUp(["--no-session"]);
+      process.chdir(base);
+      const record = loadState(resolveEnv()).records.find((r) => r.localCwd === localCwd)!;
+      const remoteCwd = record.remoteCwd;
+      writeFileSync(join(remoteCwd, "remote-new.txt"), "made remotely\n");
+      await git(remoteCwd, "add", "remote-new.txt");
+      await git(remoteCwd, "commit", "-q", "-m", "remote work");
+
+      // A record shipped by an older beam (or before a reboot) carries a
+      // `dev` beside every inode. APFS hands out a different st_dev after
+      // every mount, so the stored value is stale by the time of the down —
+      // exactly issue #17. The stale device must be ignored, not refused.
+      const staleDevice = { dev: "16777234" };
+      updateRecord(resolveEnv(), record.id, {
+        wtGit: {
+          ...record.wtGit!,
+          commonDirId: { ...staleDevice, ...record.wtGit!.commonDirId! },
+          worktreeGitDirId: { ...staleDevice, ...record.wtGit!.worktreeGitDirId! },
+        },
+        localCwdId: { ...staleDevice, ...record.localCwdId! },
+      });
+
+      await cmdDown([record.id]);
+      const mainQ = qval(record, "values", "refs/heads/main");
+      expect((await git(localCwd, "show", "-s", "--format=%s", mainQ)).stdout.trim()).toBe(
+        "remote work",
+      );
+      expect(loadState(resolveEnv()).records.find((r) => r.id === record.id)!.status).toBe("up");
+
+      // A changed inode is still refused, and the refusal names the pin
+      // that failed so a reboot is never mistaken for a replacement.
+      updateRecord(resolveEnv(), record.id, {
+        wtGit: { ...record.wtGit!, commonDirId: { ino: "1" } },
+      });
+      await expect(cmdDown([record.id])).rejects.toThrow(/its inode changed \(1 -> /);
+    },
+    60_000,
+  );
+
+  test(
     "a linked worktree whose common-dir pathname is reused by an unrelated repository " +
       "fails closed; the original pair collects after moving back",
     async () => {
@@ -2347,7 +2400,6 @@ describe.skipIf(!HAVE_DEPS)("cmdDown refuses same-path repository replacement " 
       const shipJson = JSON.stringify(record.wtGit);
       expect(shipJson).toContain(`"${commonStat.ino}"`);
       expect(shipJson).toContain(`"${wtStat.ino}"`);
-      expect(shipJson).toContain(`"${commonStat.dev}"`);
 
       const remoteCwd = record.remoteCwd;
       writeFileSync(join(remoteCwd, "remote-new.txt"), "made remotely\n");

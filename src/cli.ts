@@ -22,6 +22,8 @@ import { cmdSetup } from "./commands/setup.ts";
 import { cmdUp } from "./commands/up.ts";
 import { cmdSkill } from "./commands/skill.ts";
 import { CliError, runJsonCommand } from "./cli-output.ts";
+import { installSignalLockRelease } from "./state.ts";
+import { beamVersion, beamVersionLine } from "./version.ts";
 
 interface CliInvocation {
   command: string;
@@ -100,6 +102,14 @@ async function dispatch(invocation: CliInvocation): Promise<unknown> {
       console.log(requested ? commandHelpText(requested) : rootHelpText());
       return undefined;
     }
+    case "version":
+    case "--version":
+    case "-V": {
+      const identity = await beamVersion();
+      if (json) return identity;
+      console.log(beamVersionLine(identity));
+      return undefined;
+    }
     default:
       throw new CliError("unknown_command", `unknown command "${command}"`, {
         nextCommand: "beam help",
@@ -108,6 +118,7 @@ async function dispatch(invocation: CliInvocation): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
+  installSignalLockRelease();
   const invocation = parseInvocation(process.argv.slice(2));
   if (invocation.json) {
     process.exitCode = await runJsonCommand(invocation.command, () => dispatch(invocation));

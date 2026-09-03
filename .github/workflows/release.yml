@@ -89,6 +89,7 @@ jobs:
         run: >-
           bun build --compile --minify
           --define BEAM_RELEASE_CODING_IMAGE="'${BEAM_CODING_IMAGE}'"
+          --define BEAM_RELEASE_VERSION="'${GITHUB_REF_NAME}'"
           --target=${{ matrix.target }}
           --outfile=${{ matrix.asset }}
           src/cli.ts

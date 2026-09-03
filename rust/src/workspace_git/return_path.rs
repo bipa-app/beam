@@ -526,18 +526,43 @@ fn assert_identity_pin(
     marker: &str,
     shipped_token: &str,
 ) -> Result<(), WorkspaceGitError> {
-    let current = dir_identity(directory)?;
-    let token = read_git_identity_token(directory, marker)?;
-    if current != *shipped_id || token.as_deref() != Some(shipped_token) {
+    if let Some(mismatch) = git_dir_identity_mismatch(directory, shipped_id, marker, shipped_token)?
+    {
         return Err(WorkspaceGitError::message(format!(
             "beam down: the {what} of {} ({}) is not the directory this handoff shipped from — \
-             it was replaced since the ship; refusing to import remote git state into a \
-             different repository",
+             {mismatch}; refusing to import remote git state into a different repository",
             local_cwd.display(),
             directory.display()
         )));
     }
     Ok(())
+}
+
+/// Why a directory is not the ship-time Git directory, or `None` when both
+/// pins hold. A changed inode means the directory itself was recreated; a
+/// missing or different marker token means the repository was replaced
+/// behind an inode that survived or was recycled.
+fn git_dir_identity_mismatch(
+    directory: &Path,
+    shipped_id: &GitDirIdentity,
+    marker: &str,
+    shipped_token: &str,
+) -> Result<Option<String>, WorkspaceGitError> {
+    let current = dir_identity(directory)?;
+    if current.ino != shipped_id.ino {
+        return Ok(Some(format!(
+            "its inode changed ({} -> {}), so the directory was recreated since the ship",
+            shipped_id.ino, current.ino
+        )));
+    }
+    let token = read_git_identity_token(directory, marker)?;
+    if token.as_deref() != Some(shipped_token) {
+        return Ok(Some(format!(
+            "its {marker} identity marker no longer matches the ship, so the repository was \
+             replaced since the ship"
+        )));
+    }
+    Ok(None)
 }
 
 async fn assert_no_sparse_layout(local_cwd: &Path, when: &str) -> Result<(), WorkspaceGitError> {
@@ -1813,13 +1838,10 @@ fn prove_bound_identity(
     marker: &str,
     token: &str,
 ) -> Result<(), WorkspaceGitError> {
-    let current = dir_identity(path)?;
-    let current_token = read_git_identity_token(path, marker)?;
-    if current != *shipped_id || current_token.as_deref() != Some(token) {
+    if let Some(mismatch) = git_dir_identity_mismatch(path, shipped_id, marker, token)? {
         return Err(WorkspaceGitError::message(format!(
-            "beam down: the {what} of {} is not the directory this handoff shipped from — it was \
-             replaced or moved since the ship; refusing to touch git state through an unproven \
-             directory",
+            "beam down: the {what} of {} is not the directory this handoff shipped from — \
+             {mismatch}; refusing to touch git state through an unproven directory",
             local_cwd.display()
         )));
     }

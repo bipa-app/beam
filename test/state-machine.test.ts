@@ -39,6 +39,7 @@ import {
   planSessionIdentity,
   publishStagedLock,
   recordSpec,
+  releaseHeldLocks,
   reserveTarget,
   stageLock,
   updateRecord,
@@ -685,6 +686,82 @@ describe("per-record operation lock", () => {
       releaseB(); // the successor still owns the path and releases it
       expect(existsSync(lock)).toBe(false);
     },
+  );
+
+  test("releaseHeldLocks gives back every held lock, newest first, and only while owned", () => {
+    const env = tempEnv();
+    acquireOperationLock(env, "r1");
+    acquireOperationLock(env, "r2");
+    const stolen = join(env.beamDir, "op-r2.lock");
+    // Outside interference replaces r2's lock: the release must leave the
+    // successor byte-identical and still give r1 back.
+    rmSync(stolen);
+    writeFileSync(stolen, "424242 0123456789abcdef\n", { flag: "wx" });
+    releaseHeldLocks();
+    expect(existsSync(join(env.beamDir, "op-r1.lock"))).toBe(false);
+    expect(readFileSync(stolen, "utf8")).toBe("424242 0123456789abcdef\n");
+    // Nothing is held any more: a second sweep is a no-op, and the ordinary
+    // release path stays reacquirable.
+    releaseHeldLocks();
+    acquireOperationLock(env, "r1")();
+  });
+
+  /**
+   * A child holding a real operation lock, killed by a real signal. The
+   * child only ever runs after `installSignalLockRelease`, exactly like the
+   * CLI, so the exit status and the lock file are the whole contract. It
+   * prints `ready` once the lock is held, so the parent awaits that byte
+   * stream instead of guessing at a startup delay.
+   */
+  const SIGNAL_CHILD = (statePath: string) => `
+import { acquireOperationLock, installSignalLockRelease } from ${JSON.stringify(statePath)};
+installSignalLockRelease();
+const beamDir = process.argv[2];
+acquireOperationLock({ home: beamDir + "/..", beamDir }, "held");
+process.stdout.write("ready\\n");
+// Hold the lock until the signal arrives; the handler exits the process.
+const { promise } = Promise.withResolvers();
+await promise;
+`;
+
+  test.each([
+    ["SIGINT", 130],
+    ["SIGTERM", 143],
+  ] as const)(
+    "%s mid-command releases the held operation lock and exits %d",
+    async (signal, exitCode) => {
+      const env = tempEnv();
+      mkdirSync(env.beamDir, { recursive: true, mode: 0o700 });
+      const statePath = join(import.meta.dirname, "..", "src", "state.ts");
+      const script = join(env.home, "signal-child.ts");
+      writeFileSync(script, SIGNAL_CHILD(statePath));
+      const child = Bun.spawn([process.execPath, script, env.beamDir], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const lock = join(env.beamDir, "op-held.lock");
+      // The child prints `ready` only after it holds the lock, so the
+      // signal never races the acquisition. Reads are bounded: a Bun
+      // startup emits a handful of chunks, never MAX_READY_CHUNKS.
+      const MAX_READY_CHUNKS = 64;
+      const reader = child.stdout.getReader();
+      let seen = "";
+      for (let chunks = 0; !seen.includes("ready\n"); chunks += 1) {
+        if (chunks === MAX_READY_CHUNKS) throw new Error("signal child never reported ready");
+        const { value, done } = await reader.read();
+        if (done) throw new Error("signal child exited before holding its lock");
+        seen += Buffer.from(value).toString("utf8");
+      }
+      expect(existsSync(lock)).toBe(true);
+      child.kill(signal);
+      expect(await child.exited).toBe(exitCode);
+      expect(await new Response(child.stderr).text()).toBe("");
+      // The lock is gone — a follow-up `beam kill --purge` acquires it
+      // instead of refusing on a dead pid (#37).
+      expect(existsSync(lock)).toBe(false);
+      acquireOperationLock(env, "held")();
+    },
+    10_000,
   );
 });
 
