@@ -44,6 +44,9 @@ import {
   planSessionIdentity,
   type BeamRecord,
 } from "../src/state.ts";
+import { createProvider } from "../src/provider/index.ts";
+import { StaticProvider } from "../src/provider/static.ts";
+import type { SandboxState } from "../src/provider/types.ts";
 import type { ToolName } from "../src/session/types.ts";
 import { ADAPTERS } from "../src/session/index.ts";
 import { claudeProjectSlug } from "../src/session/claude.ts";
@@ -440,6 +443,151 @@ function stateGolden() {
     return { label, resolved: isRemoteCwdResolved(r) };
   });
   return { planSessionIdentity: planOutputs, isRemoteCwdResolved: cwdResolved };
+}
+
+class ProviderGoldenTransport implements Transport {
+  readonly label = "provider golden transport";
+
+  async exec(): Promise<ExecResult> {
+    return { code: 0, stdout: "", stderr: "" };
+  }
+
+  async execChecked(): Promise<string> {
+    return "";
+  }
+
+  async syncUp(): Promise<void> {}
+
+  async syncDown(): Promise<void> {}
+
+  async exists(): Promise<boolean> {
+    return false;
+  }
+
+  interactiveArgv(): string[] {
+    return [];
+  }
+}
+
+async function providerCoreGolden() {
+  const sandboxStates = providerSandboxStates();
+  const transport = new ProviderGoldenTransport();
+  const provider = new StaticProvider(transport);
+  const ref = { id: "rec1" };
+  let persistCalls = 0;
+  const provisioned = await provider.provision(ref, () => {
+    persistCalls += 1;
+  });
+  const connected = await provider.connect(ref);
+  await provider.destroy(ref);
+  const sshProvider = createProvider({
+    type: "ssh",
+    host: "sandbox.example",
+    rsyncFlags: ["-a"],
+  });
+  const localProvider = createProvider({
+    type: "local",
+    root: "/beam",
+    home: "/",
+    rsyncFlags: ["-a"],
+  });
+  const directory = mkdtempSync(join(tmpdir(), "beam-provider-golden-"));
+  const rsync = join(directory, "rsync");
+  const path = process.env.PATH;
+  try {
+    process.env.PATH = directory;
+    writeFileSync(rsync, "#!/bin/sh\nexit 0\n");
+    chmodSync(rsync, 0o755);
+    const available = await provider.check();
+    writeFileSync(rsync, "#!/bin/sh\nexit 127\n");
+    const missing = await provider.check();
+    return {
+      sandboxStates,
+      staticFactories: {
+        ssh: {
+          label: sshProvider.label,
+          reusesSandbox: sshProvider.reusesSandbox,
+        },
+        local: {
+          label: localProvider.label,
+          reusesSandbox: localProvider.reusesSandbox,
+        },
+      },
+      staticProvider: {
+        label: provider.label,
+        reusesSandbox: provider.reusesSandbox,
+        sandboxState: provider.sandboxState(ref) ?? null,
+        provisionReturnsTransport: provisioned === transport,
+        connectReturnsTransport: connected === transport,
+        persistCalls,
+        destroysWithoutConnection:
+          "destroyAfterVerifiedCleanupWithoutConnection" in provider,
+        available,
+        missing,
+      },
+    };
+  } finally {
+    if (path === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = path;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function providerSandboxStates(): Record<string, SandboxState> {
+  return {
+    agentLegacy: {
+      claim: "beam-rec1",
+      context: "ctx",
+      namespace: "beam-user",
+      container: "sandbox",
+    },
+    agentPinned: {
+      claim: "beam-rec1",
+      context: "ctx",
+      namespace: "beam-user",
+      container: "sandbox",
+      kubeconfig: "/keys/beam",
+      template: "beam-coding",
+      uid: "claim-uid",
+    },
+    box: { kind: "box", boxId: "box-123" },
+    e2bInitial: { kind: "e2b", ownerToken: "owner-e2b" },
+    e2bPinned: {
+      kind: "e2b",
+      ownerToken: "owner-e2b",
+      sandboxId: "sandbox-e2b",
+      sshKeySha256: "a".repeat(64),
+    },
+    modalInitial: {
+      kind: "modal",
+      ownerToken: "owner-modal",
+      sandboxName: "beam-rec1-owner",
+      volumeName: "beam-rec1-owner",
+    },
+    modalPinned: {
+      kind: "modal",
+      ownerToken: "owner-modal",
+      sandboxName: "beam-rec1-owner",
+      volumeName: "beam-rec1-owner",
+      sshKeySha256: "b".repeat(64),
+      volumeOwned: true,
+      bootstrappedSandboxId: "modal-sandbox",
+    },
+    daytonaInitial: {
+      kind: "daytona",
+      ownerToken: "owner-daytona",
+      sandboxName: "beam-rec1-owner",
+    },
+    daytonaPinned: {
+      kind: "daytona",
+      ownerToken: "owner-daytona",
+      sandboxName: "beam-rec1-owner",
+      sandboxId: "daytona-sandbox",
+    },
+  };
 }
 
 const LOCAL_WALK_PATHS = [
@@ -932,6 +1080,7 @@ async function main(): Promise<void> {
     ["config.json", serialize(configGolden())],
     ["cli-output.json", serialize(await cliOutputGolden())],
     ["state.json", serialize(stateGolden())],
+    ["provider-core.json", serialize(await providerCoreGolden())],
     ["local-transport.json", serialize(localTransportGolden())],
     ["ssh-transport.json", serialize(sshTransportGolden())],
     ["kubectl-transport.json", serialize(kubectlTransportGolden())],

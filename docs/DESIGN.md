@@ -837,9 +837,11 @@ file, the agent sources and removes it before launch, and failed starts remove
 both the workspace and staged credentials before becoming retryable. Captured
 subprocesses own a process group, so timeout and output-cap failures kill
 descendants that inherited their pipes. TypeScript goldens pin every generated
-workspace, git, session, and runtime shell byte-exact. Provider and command
-orchestration are not yet ported, so the TypeScript binary still owns every
-user-visible flow.
+workspace, git, session, runtime, and provider-core contract byte-exact. The
+provider core owns exact persisted sandbox-state variants, the dyn-compatible
+lifecycle trait, and `StaticProvider` construction for local and SSH targets.
+Managed providers and global provider selection are not yet ported, so the
+TypeScript binary still owns every user-visible command flow.
 
 ## Later
 
