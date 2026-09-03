@@ -68,6 +68,27 @@ export function archiveReceiptScript(remoteArchive: string): string {
   );
 }
 
+/**
+ * Archive a staged tree (`.` under `staging`) into `localArchive` with the
+ * local tar. macOS bsdtar packs every extended attribute — and macOS 14+
+ * stamps `com.apple.provenance` on each file a tracked process creates,
+ * the rsync'd staging copies included — as an AppleDouble `._name` sibling
+ * entry, while its own `tar -t` hides those entries. The archive then
+ * lands on a Linux pod with twice the staged entries and the strict mirror
+ * proof refuses forever (#37). COPYFILE_DISABLE is bsdtar's documented off
+ * switch and inert for GNU tar.
+ */
+export async function createShipArchive(
+  staging: string,
+  localArchive: string,
+  verbose: boolean,
+): Promise<void> {
+  await runChecked(
+    ["tar", "-czf", localArchive, ...(verbose ? ["-v"] : []), "-C", staging, "."],
+    { interactive: verbose, env: { COPYFILE_DISABLE: "1" } },
+  );
+}
+
 export interface SyncMarker {
   /** Normalized destination this license is keyed to. */
   dest: string;
@@ -642,10 +663,7 @@ export class KubectlTransport implements Transport {
     const remoteArchive = `/tmp/beam-syncup-${nonce}.tar.gz`;
     const localArchive = join(tmpdir(), `beam-syncup-local-${nonce}.tar.gz`);
     try {
-      await runChecked(
-        ["tar", "-czf", localArchive, ...(step.verbose ? ["-v"] : []), "-C", step.staging, "."],
-        { interactive: step.verbose },
-      );
+      await createShipArchive(step.staging, localArchive, step.verbose);
       const expectedBytes = statSync(localArchive).size;
       const expectedDigest = fileSha256(localArchive);
       let uploaded = false;

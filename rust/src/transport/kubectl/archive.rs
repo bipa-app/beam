@@ -1,5 +1,6 @@
 //! Verified archive data plane for the kubectl transport.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -165,7 +166,17 @@ impl KubectlTransport {
             staging.as_os_str().to_owned(),
             OsString::from("."),
         ]);
-        run_checked(&tar, &self.process_options(verbose))
+        // macOS bsdtar packs every extended attribute (macOS 14+ stamps
+        // `com.apple.provenance` on each file a tracked process creates,
+        // including the rsync'd staging copies) as an AppleDouble `._name`
+        // sibling entry, and its own `tar -t` hides them, so the archive
+        // lands with twice the staged entries and the strict mirror proof
+        // refuses forever (#37). COPYFILE_DISABLE is bsdtar's documented
+        // off switch and inert for GNU tar.
+        let mut options = self.process_options(verbose);
+        let archive_env = BTreeMap::from([("COPYFILE_DISABLE".to_owned(), "1".to_owned())]);
+        options.env = Some(&archive_env);
+        run_checked(&tar, &options)
             .await
             .map_err(TransportError::from)?;
         let expected_bytes = archive_bytes(local_archive)?;
