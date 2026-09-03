@@ -14,6 +14,7 @@ import {
   writeSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { ensurePrivateBeamDir } from "./util/private-dir.ts";
 import { unreachable } from "./util/invariant.ts";
@@ -434,6 +435,13 @@ function isStableResidue(obs: LockIdentity): boolean {
 }
 
 /**
+ * Every lock this process holds right now, oldest first. A termination
+ * signal never runs a `finally`, so {@link releaseHeldLocks} is the only
+ * way an interrupted command gives its locks back.
+ */
+const heldLocks: LockIdentity[] = [];
+
+/**
  * Release an owned lock, but only while the pathname still names the exact
  * inode+bytes this process published. On ownership loss (the lock vanished
  * or a successor replaced it — possible only through outside interference)
@@ -441,6 +449,8 @@ function isStableResidue(obs: LockIdentity): boolean {
  * mutual exclusion may have been violated while we held it.
  */
 export function releaseLock(owned: LockIdentity): void {
+  const held = heldLocks.indexOf(owned);
+  if (held !== -1) heldLocks.splice(held, 1);
   const obs = observeLock(owned.path);
   if (!obs || !sameLock(obs, owned)) {
     console.error(
@@ -454,6 +464,47 @@ export function releaseLock(owned: LockIdentity): void {
     unlinkSync(owned.path);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+}
+
+/**
+ * Release every lock this process still holds, newest first — the same
+ * only-if-still-ours release as the ordinary path, so a successor's lock
+ * is never touched. Keeps going past a failed release and rethrows the
+ * first failure once every lock was tried.
+ */
+export function releaseHeldLocks(): void {
+  let firstFailure: unknown;
+  // Terminates: releaseLock unregisters its lock before anything that can
+  // throw, so every iteration shrinks the held list by one.
+  while (heldLocks.length > 0) {
+    const owned = heldLocks[heldLocks.length - 1]!;
+    try {
+      releaseLock(owned);
+    } catch (err) {
+      if (firstFailure === undefined) firstFailure = err;
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure;
+}
+
+/**
+ * Ctrl-C and a supervisor's SIGTERM end the process without running any
+ * `finally`: an interrupted `beam up` used to leave its operation lock
+ * behind, and the next `beam kill --purge` refused on it (#37). Install
+ * once at CLI startup: the handler gives every held lock back, then exits
+ * with the conventional 128+signal status the default action would have
+ * produced.
+ */
+export function installSignalLockRelease(): void {
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      try {
+        releaseHeldLocks();
+      } finally {
+        process.exit(128 + osConstants.signals[signal]);
+      }
+    });
   }
 }
 
@@ -477,7 +528,10 @@ export function acquireLockFile(
   const deadline = Date.now() + opts.waitMs;
   for (;;) {
     const owned = publishStagedLock(stageLock(path));
-    if (owned) return owned;
+    if (owned) {
+      heldLocks.push(owned);
+      return owned;
+    }
     const obs = observeLock(path);
     if (!obs) continue; // holder released between our publish attempt and read — retry
     const owner = parseLockOwner(obs.bytes);

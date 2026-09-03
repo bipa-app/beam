@@ -22,6 +22,7 @@ import { cmdSetup } from "./commands/setup.ts";
 import { cmdUp } from "./commands/up.ts";
 import { cmdSkill } from "./commands/skill.ts";
 import { CliError, runJsonCommand } from "./cli-output.ts";
+import { installSignalLockRelease } from "./state.ts";
 
 interface CliInvocation {
   command: string;
@@ -108,6 +109,7 @@ async function dispatch(invocation: CliInvocation): Promise<unknown> {
 }
 
 async function main(): Promise<void> {
+  installSignalLockRelease();
   const invocation = parseInvocation(process.argv.slice(2));
   if (invocation.json) {
     process.exitCode = await runJsonCommand(invocation.command, () => dispatch(invocation));
