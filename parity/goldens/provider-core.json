@@ -1,0 +1,88 @@
+{
+  "sandboxStates": {
+    "agentLegacy": {
+      "claim": "beam-rec1",
+      "context": "ctx",
+      "namespace": "beam-user",
+      "container": "sandbox"
+    },
+    "agentPinned": {
+      "claim": "beam-rec1",
+      "context": "ctx",
+      "namespace": "beam-user",
+      "container": "sandbox",
+      "kubeconfig": "/keys/beam",
+      "template": "beam-coding",
+      "uid": "claim-uid"
+    },
+    "box": {
+      "kind": "box",
+      "boxId": "box-123"
+    },
+    "e2bInitial": {
+      "kind": "e2b",
+      "ownerToken": "owner-e2b"
+    },
+    "e2bPinned": {
+      "kind": "e2b",
+      "ownerToken": "owner-e2b",
+      "sandboxId": "sandbox-e2b",
+      "sshKeySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "modalInitial": {
+      "kind": "modal",
+      "ownerToken": "owner-modal",
+      "sandboxName": "beam-rec1-owner",
+      "volumeName": "beam-rec1-owner"
+    },
+    "modalPinned": {
+      "kind": "modal",
+      "ownerToken": "owner-modal",
+      "sandboxName": "beam-rec1-owner",
+      "volumeName": "beam-rec1-owner",
+      "sshKeySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "volumeOwned": true,
+      "bootstrappedSandboxId": "modal-sandbox"
+    },
+    "daytonaInitial": {
+      "kind": "daytona",
+      "ownerToken": "owner-daytona",
+      "sandboxName": "beam-rec1-owner"
+    },
+    "daytonaPinned": {
+      "kind": "daytona",
+      "ownerToken": "owner-daytona",
+      "sandboxName": "beam-rec1-owner",
+      "sandboxId": "daytona-sandbox"
+    }
+  },
+  "staticFactories": {
+    "ssh": {
+      "label": "ssh sandbox.example",
+      "reusesSandbox": false
+    },
+    "local": {
+      "label": "local (home=/)",
+      "reusesSandbox": false
+    }
+  },
+  "staticProvider": {
+    "label": "provider golden transport",
+    "reusesSandbox": false,
+    "sandboxState": null,
+    "provisionReturnsTransport": true,
+    "connectReturnsTransport": true,
+    "persistCalls": 0,
+    "destroysWithoutConnection": false,
+    "available": {
+      "lines": [
+        "local rsync:  ok"
+      ]
+    },
+    "missing": {
+      "lines": [
+        "local rsync:  MISSING — install rsync"
+      ]
+    }
+  }
+}

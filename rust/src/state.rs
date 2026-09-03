@@ -1,11 +1,12 @@
 //! Handoff record state surface, transliterated from `src/state.ts`. The
-//! full BeamRecord has many fields owned by other seams (workspace-git,
-//! provider, session); this module models only what the pure state-surface
-//! functions read, and defers the rest to those seams' phases.
+//! full BeamRecord has more fields owned by workspace-git and session; this
+//! module models the provider identity now because provider lifecycle binds
+//! every remote effect through it.
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::TargetSpec;
+use crate::provider::SandboxState;
 
 mod lock;
 
@@ -63,10 +64,8 @@ impl ToolName {
     }
 }
 
-/// The slice of BeamRecord the state-surface functions read. Serialized
-/// with the full record's field names so a persisted state.json loads;
-/// the many fields owned by other seams are tolerated on load and not
-/// modeled here yet.
+/// The record fields needed by the ported state and provider seams.
+/// Unknown fields remain tolerated while later port phases claim them.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BeamRecord {
@@ -88,6 +87,9 @@ pub struct BeamRecord {
     /// Snapshot of the target spec this handoff was created against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_spec: Option<TargetSpec>,
+    /// Provider-owned durable resource identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxState>,
 }
 
 /// Whether record.remoteCwd was actually resolved on the target. Absent on
