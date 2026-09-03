@@ -62,7 +62,10 @@ import {
   stageWorkspaceShip,
   workspaceOwnerContent,
   remoteWorkspaceTreeFingerprint,
+  remoteWorkspaceTreeMismatch,
+  describeWorkspaceMismatch,
   stagedWorkspaceTreeFingerprint,
+  type WorkspaceTreeFingerprint,
   publishWorkspaceUploadStage,
   remoteWorkspaceUploadStagePresent,
   removeWorkspaceUploadStage,
@@ -1522,18 +1525,51 @@ async function upConvergePendingWorkspace(
   await publishWorkspaceUploadStage(ship.t, ship.remoteCwd, pending.workspaceDigest, ship.owner);
   const remoteWs = await remoteWorkspaceTreeFingerprint(ship.t, ship.remoteCwd);
   if (remoteWs.digest !== stagedWs.digest || remoteWs.entries !== stagedWs.entries) {
-    throw new Error(
-      `handoff ${ship.id}: the uploaded workspace does not match the staged mirror ` +
-        `(${remoteWs.entries} vs ${stagedWs.entries} entries) — something else is writing in ` +
-        `${ship.remoteCwd}; refusing to continue (nothing was deleted). Inspect the target, ` +
-        `then retry beam up or retire the handoff (beam kill ${ship.id} --purge)`,
-    );
+    throw await upWorkspaceMismatchError(ship, {
+      remoteWs,
+      stagedWs,
+      shipStageDir: o.shipStageDir,
+    });
   }
   // Proof first, then the journal flip, then the reap: a crash between
   // any two leaves a state the next retry converges from.
   updateRecord(ship.env, ship.id, { shipPending: { ...pending, workspaceInstalled: true } });
   await removeWorkspaceUploadStage(ship.t, ship.remoteCwd, pending.workspaceDigest, ship.owner);
   return true;
+}
+
+/**
+ * The strict-proof refusal, naming WHICH entries differ. Two counts alone
+ * sent one operator on an hour-long hunt (#37: every extra was an
+ * AppleDouble `._` sibling). The diagnostic re-reads the target on the
+ * failure path only; if that read fails too, the refusal still carries
+ * the counts plus the diagnostic's own error, never a masked cause.
+ */
+async function upWorkspaceMismatchError(
+  ship: UpShipContext,
+  o: {
+    remoteWs: WorkspaceTreeFingerprint;
+    stagedWs: WorkspaceTreeFingerprint;
+    shipStageDir: string;
+  },
+): Promise<Error> {
+  let detail: string;
+  try {
+    detail = describeWorkspaceMismatch(
+      await remoteWorkspaceTreeMismatch(ship.t, ship.remoteCwd, o.shipStageDir),
+    );
+  } catch (error) {
+    detail = `the entry listing could not be read back: ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  }
+  return new Error(
+    `handoff ${ship.id}: the uploaded workspace does not match the staged mirror ` +
+      `(${o.remoteWs.entries} vs ${o.stagedWs.entries} entries): ${detail} — something else ` +
+      `is writing in ${ship.remoteCwd}, or an earlier attempt left entries behind; refusing ` +
+      `to continue (nothing was deleted). Inspect the target, then retry beam up or retire ` +
+      `the handoff (beam kill ${ship.id} --purge)`,
+  );
 }
 
 /**
@@ -1651,12 +1687,11 @@ async function upUploadFreshGeneration(
   // the extra preserved.
   const remoteWs = await remoteWorkspaceTreeFingerprint(ship.t, ship.remoteCwd);
   if (remoteWs.digest !== stagedWs.digest || remoteWs.entries !== stagedWs.entries) {
-    throw new Error(
-      `handoff ${ship.id}: the uploaded workspace does not match the staged mirror ` +
-        `(${remoteWs.entries} vs ${stagedWs.entries} entries) — something else is writing in ` +
-        `${ship.remoteCwd}; refusing to continue (nothing was deleted). Inspect the target, ` +
-        `then retry beam up or retire the handoff (beam kill ${ship.id} --purge)`,
-    );
+    throw await upWorkspaceMismatchError(ship, {
+      remoteWs,
+      stagedWs,
+      shipStageDir: o.shipStageDir,
+    });
   }
   // The publish is proven: flip `workspaceInstalled` (a retry may now skip
   // the upload entirely and re-prove the live root against the journaled

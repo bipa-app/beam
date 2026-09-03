@@ -1063,14 +1063,15 @@ export interface WorkspaceTreeFingerprint {
 
 const WS_FP_SENTINEL = "__beam_ws_fp_v1__";
 
-export async function remoteWorkspaceTreeFingerprint(
-  t: Transport,
-  remoteCwd: string,
-): Promise<WorkspaceTreeFingerprint> {
+/**
+ * Shell lines that compute the strict manifest of the entered workspace
+ * into `$__beam_manifest` (sorted, one entry per line) — shared by the
+ * fingerprint proof and the mismatch diagnostic so both describe the SAME
+ * tree the same way. Refuses non-regular entries and unprovable names.
+ */
+function remoteWorkspaceManifestScriptLines(): string[] {
   const prune = `-path ./.beam -prune -o`;
-  const script = [
-    "set -u",
-    enterWorkspaceScript(remoteCwd),
+  return [
     `__beam_odd=$(find . ${prune} ! -type f ! -type d ! -type l -print | LC_ALL=C sort)`,
     `if [ -n "$__beam_odd" ]; then printf '%s\\n' ${shq(
       `beam: the shipped workspace contains non-regular entries (device/fifo/socket)` +
@@ -1100,6 +1101,17 @@ export async function remoteWorkspaceTreeFingerprint(
     `if [ "$((__beam_fc))" -ne "$((__beam_fm))" ]; then echo "beam: the workspace proof` +
       ` hashed $__beam_fm of $__beam_fc files — refusing an incomplete proof" >&2;` +
       ` exit 81; fi`,
+  ];
+}
+
+export async function remoteWorkspaceTreeFingerprint(
+  t: Transport,
+  remoteCwd: string,
+): Promise<WorkspaceTreeFingerprint> {
+  const script = [
+    "set -u",
+    enterWorkspaceScript(remoteCwd),
+    ...remoteWorkspaceManifestScriptLines(),
     `__beam_digest=$(printf '%s\\n' "$__beam_manifest" | $__beam_hash | awk '{print $1}')`,
     `__beam_total=$(printf '%s\\n' "$__beam_manifest" | wc -l)`,
     `printf '%s %s %s\\n' ${shq(WS_FP_SENTINEL)} "$__beam_digest" "$((__beam_total))"`,
@@ -1125,6 +1137,119 @@ export async function remoteWorkspaceTreeFingerprint(
 }
 
 /**
+ * Ceiling on manifest lines the mismatch diagnostic pulls back from the
+ * target. A diagnostic only names the FIRST differences, so a listing cut
+ * at the ceiling still names them; the cap keeps the control-plane reply
+ * well inside the subprocess output limit (~100 bytes per line).
+ */
+const MAX_MISMATCH_MANIFEST_LINES = 50_000;
+
+/** How many differing entries a mismatch message names per category. */
+const MISMATCH_NAMES_MAX = 10;
+
+/** One category of difference between the target tree and the staged mirror. */
+interface WorkspaceMismatchCategory {
+  count: number;
+  /** The first entries, byte-sorted, at most MISMATCH_NAMES_MAX. */
+  names: string[];
+}
+
+/**
+ * Which entries make the uploaded workspace differ from the staged
+ * mirror: paths only on the target, paths only in the mirror, and paths
+ * on both whose content (file digest or link target) differs. Computed
+ * from the same manifest lines both proofs hash, so a name listed here is
+ * exactly why the digests disagree. Diagnostic only: it runs on the
+ * failure path, after the proof already refused, and never mutates.
+ */
+export async function remoteWorkspaceTreeMismatch(
+  t: Transport,
+  remoteCwd: string,
+  stageDir: string,
+): Promise<{
+  unexpected: WorkspaceMismatchCategory;
+  missing: WorkspaceMismatchCategory;
+  changed: WorkspaceMismatchCategory;
+  truncated: boolean;
+}> {
+  const script = [
+    "set -u",
+    enterWorkspaceScript(remoteCwd),
+    ...remoteWorkspaceManifestScriptLines(),
+    `printf '%s\\n' "$__beam_manifest" | head -n ${MAX_MISMATCH_MANIFEST_LINES}`,
+  ].join("\n");
+  const remoteLines = (await t.execChecked(script)).split("\n").filter((line) => line !== "");
+  const truncated = remoteLines.length === MAX_MISMATCH_MANIFEST_LINES;
+  const remote = manifestByPath(remoteLines);
+  const staged = manifestByPath(stagedWorkspaceTreeManifest(stageDir).map((l) => l.toString()));
+  const unexpected: string[] = [];
+  const changed: string[] = [];
+  for (const [path, line] of remote) {
+    const stagedLine = staged.get(path);
+    if (stagedLine === undefined) {
+      unexpected.push(path);
+    } else {
+      if (stagedLine !== line) changed.push(path);
+    }
+  }
+  const missing: string[] = [];
+  for (const path of staged.keys()) {
+    if (!remote.has(path)) missing.push(path);
+  }
+  const category = (paths: string[]): WorkspaceMismatchCategory => ({
+    count: paths.length,
+    names: paths.sort().slice(0, MISMATCH_NAMES_MAX),
+  });
+  return {
+    unexpected: category(unexpected),
+    missing: category(missing),
+    changed: category(changed),
+    truncated,
+  };
+}
+
+/** Manifest lines keyed by their entry path (`d <path>`, `f <sha> <path>`, `l <sha> <path>`). */
+function manifestByPath(lines: string[]): Map<string, string> {
+  const byPath = new Map<string, string>();
+  for (const line of lines) {
+    const path = line.startsWith("d ") ? line.slice(2) : line.slice("f ".length + 64 + 1);
+    byPath.set(path, line);
+  }
+  return byPath;
+}
+
+/**
+ * One line of the uploaded-workspace mismatch message: every non-empty
+ * category with its count and first names, or the content-only wording
+ * when the manifests differ without any named difference (a truncated
+ * listing, or a difference past the listing ceiling).
+ */
+export function describeWorkspaceMismatch(mismatch: {
+  unexpected: WorkspaceMismatchCategory;
+  missing: WorkspaceMismatchCategory;
+  changed: WorkspaceMismatchCategory;
+  truncated: boolean;
+}): string {
+  const parts: string[] = [];
+  const describe = (label: string, category: WorkspaceMismatchCategory): void => {
+    if (category.count === 0) return;
+    const more = category.count > category.names.length ? ", …" : "";
+    parts.push(`${category.count} ${label}: ${category.names.join(", ")}${more}`);
+  };
+  describe("on the target but not in the mirror", mismatch.unexpected);
+  describe("in the mirror but not on the target", mismatch.missing);
+  describe("with different content", mismatch.changed);
+  if (parts.length === 0) {
+    return "the manifests differ past the first " +
+      `${MAX_MISMATCH_MANIFEST_LINES} entries listed`;
+  }
+  const note = mismatch.truncated
+    ? ` (target listing cut at ${MAX_MISMATCH_MANIFEST_LINES} entries)`
+    : "";
+  return `${parts.join("; ")}${note}`;
+}
+
+/**
  * Directory-depth ceiling for the explicit tree-walk stacks below. Real
  * filesystems cap a whole path near PATH_MAX (4096 bytes on Linux, 1024 on
  * macOS), so a walk deeper than this means a cycle or a runaway tree —
@@ -1143,6 +1268,18 @@ interface TreeWalkFrame {
 
 /** The exact same manifest computed over the local materialized ship stage. */
 export function stagedWorkspaceTreeFingerprint(stageDir: string): WorkspaceTreeFingerprint {
+  const lines = stagedWorkspaceTreeManifest(stageDir);
+  const h = new Bun.CryptoHasher("sha256");
+  const nl = Buffer.from("\n");
+  for (const line of lines) {
+    h.update(line);
+    h.update(nl);
+  }
+  return { digest: h.digest("hex"), entries: lines.length };
+}
+
+/** The byte-sorted manifest lines of the local ship stage, as the target computes them. */
+function stagedWorkspaceTreeManifest(stageDir: string): Buffer[] {
   const lines: Buffer[] = [];
   // Explicit preorder stack (Tiger: no recursion). The top frame is the
   // directory being scanned; entering a subdirectory pushes a frame, so
@@ -1195,13 +1332,7 @@ export function stagedWorkspaceTreeFingerprint(stageDir: string): WorkspaceTreeF
     }
   }
   lines.sort(Buffer.compare);
-  const h = new Bun.CryptoHasher("sha256");
-  const nl = Buffer.from("\n");
-  for (const line of lines) {
-    h.update(line);
-    h.update(nl);
-  }
-  return { digest: h.digest("hex"), entries: lines.length };
+  return lines;
 }
 
 /**
