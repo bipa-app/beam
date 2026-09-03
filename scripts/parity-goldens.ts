@@ -45,6 +45,8 @@ import {
   type BeamRecord,
 } from "../src/state.ts";
 import { createProvider } from "../src/provider/index.ts";
+import { BoxProvider } from "../src/provider/box.ts";
+import { bootstrapManagedLinux } from "../src/provider/managed-ssh.ts";
 import { StaticProvider } from "../src/provider/static.ts";
 import type { SandboxState } from "../src/provider/types.ts";
 import type { ToolName } from "../src/session/types.ts";
@@ -534,6 +536,99 @@ async function providerCoreGolden() {
     }
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+interface BoxProviderGoldenInternals {
+  createArgs(): string[];
+  resumeArgs(boxId: string): string[];
+}
+
+function caughtMessage(action: () => unknown): string {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof Error) return error.message;
+    throw error;
+  }
+  throw new Error("golden action unexpectedly succeeded");
+}
+
+function boxProviderErrors(provider: BoxProvider) {
+  return {
+    invalidMachineType: caughtMessage(() => new BoxProvider({
+      type: "box",
+      machineType: "tiny",
+    } as unknown as ConstructorParameters<typeof BoxProvider>[0])),
+    emptyEnvironment: caughtMessage(() => new BoxProvider({
+      type: "box",
+      environment: " ",
+    })),
+    zeroTtl: caughtMessage(() => new BoxProvider({ type: "box", ttlSeconds: 0 })),
+    excessiveTtl: caughtMessage(() => new BoxProvider({
+      type: "box",
+      ttlSeconds: 30 * 24 * 60 * 60 + 1,
+    })),
+    malformedPersistedId: caughtMessage(() => provider.sandboxState({
+      id: "rec1",
+      sandbox: { kind: "box", boxId: "../foreign" },
+    })),
+    foreignPersistedKind: caughtMessage(() => provider.sandboxState({
+      id: "rec1",
+      sandbox: {
+        claim: "beam-rec1",
+        context: "ctx",
+        namespace: "beam-user",
+        container: "sandbox",
+      },
+    })),
+  };
+}
+
+async function boxProviderGolden() {
+  const configurations = [
+    { label: "default", spec: { type: "box" } as const },
+    {
+      label: "explicit",
+      spec: {
+        type: "box",
+        machineType: "small",
+        environment: "beam",
+        ttlSeconds: 7200,
+      } as const,
+    },
+  ].map(({ label, spec }) => {
+    const provider = new BoxProvider(spec);
+    const internals = provider as unknown as BoxProviderGoldenInternals;
+    return {
+      label,
+      createArgs: internals.createArgs(),
+      resumeArgs: internals.resumeArgs("bx_fixture1"),
+    };
+  });
+  const provider = new BoxProvider({ type: "box" });
+  let bootstrapScript = "";
+  const transport = {
+    async execChecked(command: string): Promise<string> {
+      bootstrapScript = command;
+      return "";
+    },
+  } as unknown as SshTransport;
+  await bootstrapManagedLinux(transport, { provider: "Box", useSudo: true });
+  return {
+    provider: {
+      label: provider.label,
+      reusesSandbox: provider.reusesSandbox,
+      sandboxState: provider.sandboxState({
+        id: "rec1",
+        sandbox: { kind: "box", boxId: "bx_fixture1" },
+      }),
+      destroysWithoutConnection:
+        "destroyAfterVerifiedCleanupWithoutConnection" in provider,
+    },
+    configurations,
+    errors: boxProviderErrors(provider),
+    bootstrapScript,
+  };
 }
 
 function providerSandboxStates(): Record<string, SandboxState> {
@@ -1081,6 +1176,7 @@ async function main(): Promise<void> {
     ["cli-output.json", serialize(await cliOutputGolden())],
     ["state.json", serialize(stateGolden())],
     ["provider-core.json", serialize(await providerCoreGolden())],
+    ["box-provider.json", serialize(await boxProviderGolden())],
     ["local-transport.json", serialize(localTransportGolden())],
     ["ssh-transport.json", serialize(sshTransportGolden())],
     ["kubectl-transport.json", serialize(kubectlTransportGolden())],

@@ -1,0 +1,55 @@
+{
+  "provider": {
+    "label": "box.ascii.dev",
+    "reusesSandbox": false,
+    "sandboxState": {
+      "kind": "box",
+      "boxId": "bx_fixture1"
+    },
+    "destroysWithoutConnection": true
+  },
+  "configurations": [
+    {
+      "label": "default",
+      "createArgs": [
+        "new",
+        "--no-auto-stop",
+        "--json"
+      ],
+      "resumeArgs": [
+        "resume",
+        "bx_fixture1",
+        "--no-auto-stop",
+        "--json"
+      ]
+    },
+    {
+      "label": "explicit",
+      "createArgs": [
+        "new",
+        "--type",
+        "small",
+        "--environment=beam",
+        "--ttl",
+        "7200",
+        "--json"
+      ],
+      "resumeArgs": [
+        "resume",
+        "bx_fixture1",
+        "--ttl",
+        "7200",
+        "--json"
+      ]
+    }
+  ],
+  "errors": {
+    "invalidMachineType": "box target machineType is invalid: \"tiny\"",
+    "emptyEnvironment": "box target environment cannot be empty",
+    "zeroTtl": "box target ttlSeconds must be a positive integer, got 0",
+    "excessiveTtl": "box target ttlSeconds exceeds Box's 30-day ceiling: 2592001",
+    "malformedPersistedId": "Box CLI returned malformed persisted box id: \"../foreign\"",
+    "foreignPersistedKind": "handoff rec1 stores an Agent Sandbox identity but its target snapshot is box — state.json tampered or corrupted?"
+  },
+  "bootstrapScript": "set -eu\nif [ \"$(uname -m)\" != x86_64 ]; then\n  echo 'beam: Box requires an x86_64 sandbox' >&2; exit 2\nfi\nif ! command -v rsync >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then\n  command -v apt-get >/dev/null 2>&1 || { echo 'beam: Box needs rsync and curl; no apt-get was found' >&2; exit 2; }\n  sudo apt-get update -qq\n  sudo apt-get install -y -qq rsync curl ca-certificates coreutils\nfi\nif ! command -v herdr >/dev/null 2>&1; then\n  __beam_herdr=\"$(mktemp)\"\n  curl -fsSL -o \"$__beam_herdr\" 'https://github.com/herdrdev/herdr/releases/download/v0.8.0/herdr-linux-x86_64'\n  printf '%s  %s\\n' 'b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28' \"$__beam_herdr\" | sha256sum -c -\n  sudo install -m 0755 \"$__beam_herdr\" /usr/local/bin/herdr\n  rm -f \"$__beam_herdr\"\nfi\ncommand -v rsync >/dev/null && command -v herdr >/dev/null"
+}
