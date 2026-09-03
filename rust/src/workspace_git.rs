@@ -76,9 +76,15 @@ const GIT_REPO_SELECTION_ENV: [&str; 22] = [
     "GIT_TEMPLATE_DIR",
 ];
 
+/// Ship-time filesystem identity of a Git directory: the inode number as a
+/// decimal string. The device number is deliberately absent — APFS, btrfs
+/// subvolumes, NFS, and overlay mounts assign `st_dev` at mount time, so a
+/// reboot between `beam up` and `beam down` changed it and refused a valid
+/// return (issue #17). The inode plus the create-only marker token is the
+/// proof. Records written by older versions carry an extra `dev` field,
+/// which serde ignores.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub struct GitDirIdentity {
-    pub dev: String,
     pub ino: String,
 }
 
@@ -327,7 +333,6 @@ pub(crate) async fn run_git_checked_with_input(
 pub(crate) fn dir_identity(path: &Path) -> Result<GitDirIdentity, WorkspaceGitError> {
     let metadata = fs::metadata(path)?;
     Ok(GitDirIdentity {
-        dev: metadata.dev().to_string(),
         ino: metadata.ino().to_string(),
     })
 }

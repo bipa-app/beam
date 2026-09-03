@@ -56,10 +56,12 @@ export interface BeamRecord {
   artifactsDir?: string;
   localCwd: string;
   /**
-   * Physical identity of the local workspace directory at reservation time.
-   * `beam integrate` re-proves both values before it may touch the path.
+   * Physical identity (inode) of the local workspace directory at
+   * reservation time. `beam integrate` re-proves it before it may touch
+   * the path. The device number is not pinned: it changes across reboots
+   * and remounts (see GitDirIdentity in workspace-git.ts).
    */
-  localCwdId?: { dev: string; ino: string };
+  localCwdId?: { ino: string };
   remoteCwd: string;
   /** Name of the handoff's herdr session on the target (`beam-<id>`). */
   runtimeSession: string;

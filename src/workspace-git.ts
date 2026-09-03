@@ -394,12 +394,17 @@ export function isGitDirAtCwd(localCwd: string): boolean {
 }
 
 /**
- * Stable filesystem identity of a Git directory: device and inode at ship
- * time, serialized as decimal strings so 64-bit values survive JSON without
- * numeric precision loss.
+ * Filesystem identity of a Git directory at ship time: the inode number,
+ * serialized as a decimal string so 64-bit values survive JSON without
+ * numeric precision loss. The device number is deliberately NOT part of
+ * the identity: APFS (and btrfs subvolumes, NFS, overlay mounts) assign
+ * st_dev at mount time, so a reboot between `beam up` and `beam down`
+ * changed it and refused a perfectly valid return (issue #17). The inode
+ * plus the create-only marker token is the proof; a same-path directory
+ * on another device with the same inode number AND the same 256-bit
+ * token can only be a copy of this very repository.
  */
 export interface GitDirIdentity {
-  dev: string;
   ino: string;
 }
 
@@ -436,7 +441,7 @@ function contentDigest(content: string | Uint8Array): string {
 /** Filesystem identity of a directory (bigint stat — precision-safe). */
 function dirIdentity(path: string): GitDirIdentity {
   const st = statSync(path, { bigint: true });
-  return { dev: st.dev.toString(), ino: st.ino.toString() };
+  return { ino: st.ino.toString() };
 }
 
 /** Ship-time identity of a materialized Git handoff, persisted on the record. */
@@ -1613,7 +1618,7 @@ async function assertWorktreeIdentity(
     (await runGitChecked(["git", "-C", localCwd, "rev-parse", "--absolute-git-dir"])).stdout.trim(),
   );
   // Same path and even the same recycled inode do not prove identity. Pin
-  // both git dirs by device+inode AND by create-only random local markers.
+  // both git dirs by inode AND by create-only random local markers.
   assertWorktreeIdentityPins(localCwd, [
     {
       what: "common git dir",
@@ -1634,7 +1639,7 @@ async function assertWorktreeIdentity(
   await assertFilesRefStorage(localCwd, "beam down");
 }
 
-/** One ship-time directory pin: device+inode plus its create-only marker token. */
+/** One ship-time directory pin: inode plus its create-only marker token. */
 interface WorktreeIdentityPin {
   what: string;
   dir: string;
@@ -1645,20 +1650,43 @@ interface WorktreeIdentityPin {
 
 function assertWorktreeIdentityPins(localCwd: string, pins: WorktreeIdentityPin[]): void {
   for (const { what, dir, shippedId, marker, shippedToken } of pins) {
-    const now = dirIdentity(dir);
-    if (
-      now.dev !== shippedId.dev ||
-      now.ino !== shippedId.ino ||
-      readGitIdentityToken(dir, marker) !== shippedToken
-    ) {
+    const mismatch = gitDirIdentityMismatch({ dir, shippedId, marker, shippedToken });
+    if (mismatch !== undefined) {
       throw new Error(
         `beam down: the ${what} of ${localCwd} (${dir}) is not the directory ` +
-          `this handoff shipped from — it was replaced since the ship; ` +
+          `this handoff shipped from — ${mismatch}; ` +
           `refusing to import remote git state into a different repository`,
       );
     }
   }
 }
+
+/**
+ * Why a directory is not the ship-time Git directory, or undefined when
+ * both pins still hold. The two pins fail for different reasons and the
+ * message must say which: a changed inode means the directory itself was
+ * recreated (a re-clone, a restore, a move across volumes), while a
+ * missing or different marker token means the repository was replaced
+ * behind an inode that survived or was recycled.
+ */
+function gitDirIdentityMismatch(pin: {
+  dir: string;
+  shippedId: GitDirIdentity;
+  marker: string;
+  shippedToken: string;
+}): string | undefined {
+  const now = dirIdentity(pin.dir);
+  if (now.ino !== pin.shippedId.ino) {
+    return `its inode changed (${pin.shippedId.ino} -> ${now.ino}), so the directory was ` +
+      `recreated since the ship`;
+  }
+  if (readGitIdentityToken(pin.dir, pin.marker) !== pin.shippedToken) {
+    return `its ${pin.marker} identity marker no longer matches the ship, so the repository ` +
+      `was replaced since the ship`;
+  }
+  return undefined;
+}
+
 export async function prepareWorktreeGitReturn(
   localCwd: string,
   _recordId: string,
@@ -1906,8 +1934,8 @@ function bindReturnRepoShipIdentity(
 
 /**
  * Prove that one directory of the bound return is a ship-time git
- * directory: device and inode plus the create-only token, read via a
- * cwd-relative path whose resolution starts at the bound cwd inode.
+ * directory: inode plus the create-only token, read via a cwd-relative
+ * path whose resolution starts at the bound cwd inode.
  */
 function proveBoundDirIdentity(opts: {
   what: string;
@@ -1917,15 +1945,16 @@ function proveBoundDirIdentity(opts: {
   marker: string;
   token: string;
 }): void {
-  const now = dirIdentity(opts.path);
-  if (
-    now.dev !== opts.shippedId.dev ||
-    now.ino !== opts.shippedId.ino ||
-    readGitIdentityToken(opts.path, opts.marker) !== opts.token
-  ) {
+  const mismatch = gitDirIdentityMismatch({
+    dir: opts.path,
+    shippedId: opts.shippedId,
+    marker: opts.marker,
+    shippedToken: opts.token,
+  });
+  if (mismatch !== undefined) {
     throw new Error(
       `beam down: the ${opts.what} of ${opts.localCwd} is not the directory ` +
-        `this handoff shipped from — it was replaced or moved since the ship; ` +
+        `this handoff shipped from — ${mismatch}; ` +
         `refusing to touch git state through an unproven directory`,
     );
   }

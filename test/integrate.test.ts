@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -76,11 +77,14 @@ async function makeFixture(options: {
   });
   const cwd = statSync(local, { bigint: true });
   const now = new Date().toISOString();
+  // Records shipped before #17 pinned the device number beside the inode;
+  // the stale value must be ignored, so the fixture keeps one on record.
+  const localCwdId = { dev: "16777234", ino: cwd.ino.toString() };
   const record: BeamRecord = {
     id,
     target: "local",
     localCwd: local,
-    localCwdId: { dev: cwd.dev.toString(), ino: cwd.ino.toString() },
+    localCwdId,
     remoteCwd,
     remoteCwdResolved: true,
     runtimeSession: `beam-${id}`,
@@ -166,6 +170,27 @@ describe("beam integrate", () => {
       "concurrent local work\n",
     );
     expect(readFileSync(join(fixture.stage, "work.txt"), "utf8")).toBe("remote\n");
+  });
+
+  test("refuses a replaced local workspace directory by inode, never by device", async () => {
+    const fixture = await makeFixture({
+      localFiles: { "work.txt": "local\n" },
+      remoteFiles: { "work.txt": "remote\n" },
+    });
+    // The fixture record already carries a device number no volume on this
+    // machine has (a reboot changes st_dev on APFS); the apply still runs.
+    const applied = await runBeam(fixture, ["integrate", fixture.id, "--yes", "--json"]);
+    expect(applied.code).toBe(0);
+    expect(JSON.parse(applied.stdout).data.status).toBe("integrated");
+
+    // A recreated directory at the same path is a different inode: refused.
+    const aside = `${fixture.local}.aside`;
+    renameSync(fixture.local, aside);
+    mkdirSync(fixture.local);
+    writeFileSync(join(fixture.local, "work.txt"), "remote\n");
+    const replaced = await runBeam(fixture, ["integrate", fixture.id, "--yes", "--json"]);
+    expect(replaced.code).toBe(1);
+    expect(JSON.parse(replaced.stdout).error.code).toBe("local_workspace_replaced");
   });
 
   test("refuses matching remote content that was written locally after up", async () => {

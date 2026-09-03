@@ -334,7 +334,7 @@ function reserveUpTarget(o: UpReserveOptions): { record: BeamRecord; reused: boo
         sessionFile: o.detected?.session.file,
         artifactsDir: o.detected?.session.artifactsDir,
         localCwd: o.localCwd,
-        localCwdId: { dev: cwd.dev.toString(), ino: cwd.ino.toString() },
+        localCwdId: { ino: cwd.ino.toString() },
         // Candidate until `pwd` resolves it.
         remoteCwd: `${root}/${remoteWorkspaceName(o.localCwd)}`,
         remoteCwdResolved: false,
