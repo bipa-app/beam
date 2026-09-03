@@ -229,6 +229,10 @@ bunx tsc --noEmit
 bun test
 ```
 
+A linked `beam` runs whatever the checkout holds. `beam --version` prints the
+checkout and its commit (`beam dev at … (commit abc1234)`); release binaries
+print their tag. `beam check` prints the same line first.
+
 Architecture and safety invariants: [docs/DESIGN.md](docs/DESIGN.md).
 Brand assets and usage rules: [docs/BRAND.md](docs/BRAND.md).
 In-session slash-command integrations: [integrations/README.md](integrations/README.md).

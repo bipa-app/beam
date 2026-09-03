@@ -69,6 +69,25 @@ describe("CLI machine-readable output", () => {
     expect(result.stdout).toContain("return");
   });
 
+  test("version names the source checkout and its commit, as text and JSON", async () => {
+    // A `bun link` install runs whatever the checkout holds; the commit is
+    // the only way to see how stale that is (#37).
+    const root = resolve(import.meta.dir, "..");
+    const text = await runCli(["--version"]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toMatch(new RegExp(`^beam dev at ${root} \\(commit [0-9a-f]{7,}`));
+    const json = await runCli(["version", "--json"]);
+    expect(json.code).toBe(0);
+    const document = JSON.parse(json.stdout) as {
+      command: string;
+      data: { version: string; source: string; commit?: string };
+    };
+    expect(document.command).toBe("version");
+    expect(document.data.version).toBe("dev");
+    expect(document.data.source).toBe(root);
+    expect(document.data.commit).toMatch(/^[0-9a-f]{7,}(-dirty)?$/);
+  });
+
   test("interactive commands return a typed refusal without terminal output", async () => {
     const result = await runCli(["attach", "--json"]);
     expect(result.code).toBe(1);

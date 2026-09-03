@@ -141,6 +141,12 @@ export const COMMAND_DOCS: Record<string, CommandDoc> = {
     interactive: false,
     options: [],
   },
+  version: {
+    summary: "Print which beam runs: release tag, or source checkout and commit.",
+    usage: "beam version",
+    interactive: false,
+    options: [],
+  },
 };
 
 export const TOPIC_DOCS: Record<string, TopicDoc> = {

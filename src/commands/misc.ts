@@ -42,6 +42,7 @@ import {
   type ProbeRecord,
 } from "../security.ts";
 import { run, shjoin, shq, shqRemotePath } from "../util/shell.ts";
+import { beamVersion, beamVersionLine } from "../version.ts";
 import { sessionStageRoot } from "./up.ts";
 import { inspectBeamSkills, type SkillState } from "./skill.ts";
 
@@ -563,6 +564,11 @@ export async function cmdCheck(args: string[]): Promise<BeamCheckResult> {
   const { name, spec } = resolveTarget(config, positionals[0]);
   const provider = createProvider(spec);
   const checks: BeamCheck[] = [];
+  // Which beam is running comes first: a stale `bun link` looks exactly
+  // like a current one otherwise (#37).
+  const identity = beamVersionLine(await beamVersion());
+  checks.push({ id: "local.version", scope: "local", status: "pass", message: identity });
+  console.log(identity);
   appendLocalSkillChecks(env.home, checks);
   console.log(`target ${name} (${provider.label})`);
   const report = await provider.check();

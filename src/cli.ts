@@ -23,6 +23,7 @@ import { cmdUp } from "./commands/up.ts";
 import { cmdSkill } from "./commands/skill.ts";
 import { CliError, runJsonCommand } from "./cli-output.ts";
 import { installSignalLockRelease } from "./state.ts";
+import { beamVersion, beamVersionLine } from "./version.ts";
 
 interface CliInvocation {
   command: string;
@@ -99,6 +100,14 @@ async function dispatch(invocation: CliInvocation): Promise<unknown> {
       const requested = rest[0];
       if (json) return commandHelpData(requested);
       console.log(requested ? commandHelpText(requested) : rootHelpText());
+      return undefined;
+    }
+    case "version":
+    case "--version":
+    case "-V": {
+      const identity = await beamVersion();
+      if (json) return identity;
+      console.log(beamVersionLine(identity));
       return undefined;
     }
     default:
