@@ -46,9 +46,10 @@ import {
 } from "../src/state.ts";
 import { createProvider } from "../src/provider/index.ts";
 import { BoxProvider } from "../src/provider/box.ts";
+import { E2bProvider } from "../src/provider/e2b.ts";
 import { bootstrapManagedLinux } from "../src/provider/managed-ssh.ts";
 import { StaticProvider } from "../src/provider/static.ts";
-import type { SandboxState } from "../src/provider/types.ts";
+import type { E2bSandboxState, SandboxState } from "../src/provider/types.ts";
 import type { ToolName } from "../src/session/types.ts";
 import { ADAPTERS } from "../src/session/index.ts";
 import { claudeProjectSlug } from "../src/session/claude.ts";
@@ -631,6 +632,94 @@ async function boxProviderGolden() {
   };
 }
 
+interface E2bProviderGoldenInternals {
+  readonly timeoutSeconds: number;
+  readonly user: string;
+  createBody(
+    ref: { id: string },
+    state: E2bSandboxState,
+    publicKey: string,
+  ): Record<string, unknown>;
+  recoveryPath(ref: { id: string }, state: E2bSandboxState): string;
+  sshOptions(id: string, identityPath: string): string[];
+}
+
+function e2bProviderErrors(provider: E2bProvider) {
+  return {
+    emptyTemplate: caughtMessage(() => new E2bProvider({ type: "e2b", template: "" })),
+    unicodeTemplateTooLong: caughtMessage(() => new E2bProvider({
+      type: "e2b",
+      template: "é".repeat(129),
+    })),
+    invalidUser: caughtMessage(() => new E2bProvider({
+      type: "e2b",
+      template: "beam-ssh",
+      user: "Root",
+    })),
+    zeroTimeout: caughtMessage(() => new E2bProvider({
+      type: "e2b",
+      template: "beam-ssh",
+      timeoutSeconds: 0,
+    })),
+    excessiveTimeout: caughtMessage(() => new E2bProvider({
+      type: "e2b",
+      template: "beam-ssh",
+      timeoutSeconds: 30 * 24 * 60 * 60 + 1,
+    })),
+    malformedOwner: caughtMessage(() => provider.sandboxState({
+      id: "rec1",
+      sandbox: { kind: "e2b", ownerToken: "not-an-owner-token" },
+    })),
+    malformedSandboxId: caughtMessage(() => provider.sandboxState({
+      id: "rec1",
+      sandbox: { kind: "e2b", ownerToken: "a".repeat(48), sandboxId: "../foreign" },
+    })),
+    malformedFingerprint: caughtMessage(() => provider.sandboxState({
+      id: "rec1",
+      sandbox: { kind: "e2b", ownerToken: "a".repeat(48), sshKeySha256: "short" },
+    })),
+    foreignPersistedKind: caughtMessage(() => provider.sandboxState({
+      id: "rec1",
+      sandbox: { kind: "box", boxId: "bx_fixture1" },
+    })),
+  };
+}
+
+function e2bProviderGolden() {
+  const state: E2bSandboxState = {
+    kind: "e2b",
+    ownerToken: "a".repeat(48),
+    sandboxId: "sbx_fixture_001",
+    sshKeySha256: "b".repeat(64),
+  };
+  const provider = new E2bProvider(
+    { type: "e2b", template: "beam-ssh", user: "beam_user", timeoutSeconds: 7200 },
+    {
+      apiBaseUrl: "https://fixture.invalid",
+      apiKey: "fixture-key",
+      websocatBin: "/tmp/web soc'at",
+    },
+  );
+  const internals = provider as unknown as E2bProviderGoldenInternals;
+  return {
+    provider: {
+      label: provider.label,
+      reusesSandbox: provider.reusesSandbox,
+      sandboxState: provider.sandboxState({ id: "rec1", sandbox: state }),
+      destroysWithoutConnection:
+        "destroyAfterVerifiedCleanupWithoutConnection" in provider,
+    },
+    protocol: {
+      timeoutSeconds: internals.timeoutSeconds,
+      user: internals.user,
+      createBody: internals.createBody({ id: "record /&?" }, state, "ssh-ed25519 AAAA"),
+      recoveryPath: internals.recoveryPath({ id: "record /&?" }, state),
+      sshOptions: internals.sshOptions("sbx_fixture_001", "/tmp/key path"),
+    },
+    errors: e2bProviderErrors(provider),
+  };
+}
+
 function providerSandboxStates(): Record<string, SandboxState> {
   return {
     agentLegacy: {
@@ -1177,6 +1266,7 @@ async function main(): Promise<void> {
     ["state.json", serialize(stateGolden())],
     ["provider-core.json", serialize(await providerCoreGolden())],
     ["box-provider.json", serialize(await boxProviderGolden())],
+    ["e2b-provider.json", serialize(e2bProviderGolden())],
     ["local-transport.json", serialize(localTransportGolden())],
     ["ssh-transport.json", serialize(sshTransportGolden())],
     ["kubectl-transport.json", serialize(kubectlTransportGolden())],

@@ -845,17 +845,20 @@ both the workspace and staged credentials before becoming retryable. Captured
 subprocesses own a process group, so timeout and output-cap failures kill
 descendants that inherited their pipes. The same bounded runner can deliver
 complete stdout lines before process exit; Box uses that path to journal its
-immutable ID before waiting for the ready event.
+immutable ID before waiting for the ready event. E2B HTTP calls now use the
+allowlisted rustls `ureq` client with the existing 120-second and 1 MiB caps.
 
 TypeScript goldens pin every generated workspace, git, session, runtime, and
 provider contract reached so far. The provider core owns exact persisted
 sandbox-state variants, the dyn-compatible lifecycle trait, and
 `StaticProvider` construction for local and SSH targets. The managed-SSH
 foundation owns per-handoff keys and the pinned Linux bootstrap. `BoxProvider`
-now owns create, reconnect, stopped-VM resume, ephemeral-IP re-resolution,
-CLI-managed key authorization, and exact-ID deletion over `SshTransport`.
-E2B, Modal, Daytona, Agent Sandbox, global provider selection, and commands
-remain on TypeScript, which still owns every user-visible flow.
+owns create, reconnect, stopped-VM resume, ephemeral-IP re-resolution,
+CLI-managed key authorization, and exact-ID deletion. `E2bProvider` owns
+reservation and key journaling, metadata-based crash recovery, template and
+owner verification, resume, the WebSocket SSH proxy, and exact-ID deletion
+over `SshTransport`. Modal, Daytona, Agent Sandbox, global provider selection,
+and commands remain on TypeScript, which still owns every user-visible flow.
 
 ## Later
 

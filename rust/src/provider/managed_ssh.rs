@@ -128,7 +128,7 @@ fn identity_path(
         .join(format!("{}-{owner_token}.ed25519", provider.name())))
 }
 
-async fn ensure_managed_ssh_identity_in(
+pub(super) async fn ensure_managed_ssh_identity_in(
     provider: ManagedSshProvider,
     owner_token: &str,
     expected_sha256: Option<&str>,
@@ -342,7 +342,7 @@ fn tighten_private_key(provider: ManagedSshProvider, path: &Path) -> Result<(), 
     Ok(())
 }
 
-fn remove_managed_ssh_identity_in(
+pub(super) fn remove_managed_ssh_identity_in(
     provider: ManagedSshProvider,
     owner_token: &str,
     environment: &BeamEnv,
@@ -413,7 +413,7 @@ fn managed_linux_bootstrap_script(options: ManagedLinuxBootstrapOptions<'_>) -> 
     .join("\n")
 }
 
-fn managed_ssh_check_lines_in(
+pub(super) fn managed_ssh_check_lines_in(
     command_environment: Option<&BTreeMap<String, String>>,
 ) -> Vec<String> {
     ["ssh", "rsync", "ssh-keygen"]
@@ -426,7 +426,9 @@ fn managed_ssh_check_lines_in(
         .collect()
 }
 
-fn managed_ssh_tools_ready_in(command_environment: Option<&BTreeMap<String, String>>) -> bool {
+pub(super) fn managed_ssh_tools_ready_in(
+    command_environment: Option<&BTreeMap<String, String>>,
+) -> bool {
     ["ssh", "rsync", "ssh-keygen"]
         .into_iter()
         .all(|tool| which(tool, command_environment).is_some())

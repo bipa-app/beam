@@ -290,16 +290,7 @@ export class E2bProvider implements SandboxProvider {
       method: "POST",
       expectedStatuses: [201],
       what: "create a sandbox",
-      body: {
-        templateID: this.spec.template,
-        timeout: this.timeoutSeconds,
-        autoPause: true,
-        autoPauseMemory: true,
-        autoResume: { enabled: false },
-        network: { allowPublicTraffic: true },
-        metadata: { "beam.owner": state.ownerToken, "beam.record": ref.id },
-        envVars: { BEAM_SSH_PUBLIC_KEY: publicKey },
-      },
+      body: this.createBody(ref, state, publicKey),
     });
     const record = asRecord(created.value, "create a sandbox");
     const id = sandboxId(record.sandboxID, "created sandbox id");
@@ -307,6 +298,23 @@ export class E2bProvider implements SandboxProvider {
     const next = { ...state, sandboxId: id };
     this.persistState(ref, next, persist);
     return next;
+  }
+
+  private createBody(
+    ref: SandboxRef,
+    state: E2bSandboxState,
+    publicKey: string,
+  ): Record<string, unknown> {
+    return {
+      templateID: this.spec.template,
+      timeout: this.timeoutSeconds,
+      autoPause: true,
+      autoPauseMemory: true,
+      autoResume: { enabled: false },
+      network: { allowPublicTraffic: true },
+      metadata: { "beam.owner": state.ownerToken, "beam.record": ref.id },
+      envVars: { BEAM_SSH_PUBLIC_KEY: publicKey },
+    };
   }
 
   private persistState(
@@ -325,12 +333,7 @@ export class E2bProvider implements SandboxProvider {
     ref: SandboxRef,
     state: E2bSandboxState,
   ): Promise<string | undefined> {
-    const query = new URLSearchParams({
-      metadata: `beam.owner=${state.ownerToken}&beam.record=${ref.id}`,
-      state: "running,paused",
-      limit: "2",
-    });
-    const result = await this.api(`/v2/sandboxes?${query}`, {
+    const result = await this.api(this.recoveryPath(ref, state), {
       method: "GET",
       expectedStatuses: [200],
       what: "recover a reserved sandbox",
@@ -347,6 +350,15 @@ export class E2bProvider implements SandboxProvider {
     const id = sandboxId(record.sandboxID, "recovered sandbox id");
     this.verifySandbox(record, { ref, state, sandboxId: id });
     return id;
+  }
+
+  private recoveryPath(ref: SandboxRef, state: E2bSandboxState): string {
+    const query = new URLSearchParams({
+      metadata: `beam.owner=${state.ownerToken}&beam.record=${ref.id}`,
+      state: "running,paused",
+      limit: "2",
+    });
+    return `/v2/sandboxes?${query}`;
   }
 
   private async getSandbox(id: string): Promise<Record<string, unknown> | undefined> {
@@ -410,23 +422,27 @@ export class E2bProvider implements SandboxProvider {
     const id = sandboxId(record.sandboxID, "connected sandbox id");
     if (id !== state.sandboxId) throw new Error("E2B connect returned a different sandbox id");
     this.verifyTemplate(record, id);
-    const proxy = `${shq(this.websocatBin)} --binary -B 65536 - wss://8081-%h.e2b.app`;
     return new SshTransport(`${this.user}@${id}`, {
       label: `E2B ${id}`,
-      sshOptions: [
-        "-i",
-        identityPath,
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        `HostKeyAlias=e2b-${id}`,
-        "-o",
-        `ProxyCommand=${proxy}`,
-      ],
+      sshOptions: this.sshOptions(id, identityPath),
     });
+  }
+
+  private sshOptions(id: string, identityPath: string): string[] {
+    const proxy = `${shq(this.websocatBin)} --binary -B 65536 - wss://8081-%h.e2b.app`;
+    return [
+      "-i",
+      identityPath,
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      `HostKeyAlias=e2b-${id}`,
+      "-o",
+      `ProxyCommand=${proxy}`,
+    ];
   }
 }

@@ -17,6 +17,7 @@ serde_json = { version = "1", features = ["preserve_order"] }
 rustix = { version = "1", features = ["fs", "process"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "time"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit", "parsing", "printing", "proc-macro"] }
