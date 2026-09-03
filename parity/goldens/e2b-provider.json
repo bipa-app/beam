@@ -1,0 +1,62 @@
+{
+  "provider": {
+    "label": "E2B",
+    "reusesSandbox": false,
+    "sandboxState": {
+      "kind": "e2b",
+      "ownerToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "sandboxId": "sbx_fixture_001",
+      "sshKeySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "destroysWithoutConnection": true
+  },
+  "protocol": {
+    "timeoutSeconds": 7200,
+    "user": "beam_user",
+    "createBody": {
+      "templateID": "beam-ssh",
+      "timeout": 7200,
+      "autoPause": true,
+      "autoPauseMemory": true,
+      "autoResume": {
+        "enabled": false
+      },
+      "network": {
+        "allowPublicTraffic": true
+      },
+      "metadata": {
+        "beam.owner": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "beam.record": "record /&?"
+      },
+      "envVars": {
+        "BEAM_SSH_PUBLIC_KEY": "ssh-ed25519 AAAA"
+      }
+    },
+    "recoveryPath": "/v2/sandboxes?metadata=beam.owner%3Daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa%26beam.record%3Drecord+%2F%26%3F&state=running%2Cpaused&limit=2",
+    "sshOptions": [
+      "-i",
+      "/tmp/key path",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "HostKeyAlias=e2b-sbx_fixture_001",
+      "-o",
+      "ProxyCommand='/tmp/web soc'\\''at' --binary -B 65536 - wss://8081-%h.e2b.app"
+    ]
+  },
+  "errors": {
+    "emptyTemplate": "e2b target template must be a non-empty id or alias of at most 128 bytes",
+    "unicodeTemplateTooLong": "e2b target template must be a non-empty id or alias of at most 128 bytes",
+    "invalidUser": "e2b target user is invalid: \"Root\"",
+    "zeroTimeout": "e2b target timeoutSeconds must be a positive integer",
+    "excessiveTimeout": "e2b target timeoutSeconds exceeds Beam's 30-day ceiling",
+    "malformedOwner": "E2B owner token is malformed — state.json tampered or corrupted?",
+    "malformedSandboxId": "E2B API returned malformed persisted sandbox id: \"../foreign\"",
+    "malformedFingerprint": "E2B SSH key fingerprint is malformed — state.json corrupted?",
+    "foreignPersistedKind": "handoff rec1 stores another provider identity but its target snapshot is e2b"
+  }
+}

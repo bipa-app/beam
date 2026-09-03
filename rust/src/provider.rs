@@ -14,10 +14,12 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::transport::Transport;
 
 mod box_provider;
+mod e2b_provider;
 mod managed_ssh;
 mod static_provider;
 
 pub use box_provider::BoxProvider;
+pub use e2b_provider::E2bProvider;
 pub use managed_ssh::{
     ManagedLinuxBootstrapOptions, ManagedSshIdentity, ManagedSshProvider, assert_owner_token,
     bootstrap_managed_linux, ensure_managed_ssh_identity, managed_ssh_check_lines,
