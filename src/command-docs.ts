@@ -51,6 +51,16 @@ export const COMMAND_DOCS: Record<string, CommandDoc> = {
       { flag: "--tool <tool>", description: "Use omp, pi, claude, or codex." },
       { flag: "--message <text>", description: "Send a kickoff message after resume." },
       { flag: "--session <id>", description: "Select an exact local harness session." },
+      {
+        flag: "--no-session",
+        description: "Ship the workspace only: no session travels, no agent starts; " +
+          "refuses --message.",
+      },
+      {
+        flag: "--allow-large",
+        description: "Ship a mirror past the 2 GiB ceiling; prefer excluding build " +
+          "artifacts in .beamignore.",
+      },
     ],
   },
   attach: {

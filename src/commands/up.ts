@@ -97,10 +97,16 @@ usage: beam up [options]
   --tool <omp|pi|claude|codex>  harness to hand off (default: auto-detect newest)
   --session <ref>         session id/filename prefix (default: newest for cwd)
   --message, -m <text>    kickoff prompt so the agent starts working unattended
-  --no-session            ship the workspace only
+  --no-session            ship the workspace only: no session travels and no agent
+                          starts, so -m is refused with it
   --no-start              install but do not start the remote agent
   --verbose, -v           stream rsync progress
   --allow-large           ship even a mirror past the size ceiling (skips the preflight)
+
+excludes: .beamignore in the workspace (rsync patterns, one per line) plus the
+  target's config excludes; \`.git\` never rides the mirror. The mirror refuses
+  past 2 GiB (build artifacts such as target/ or node_modules/ belong in
+  .beamignore) unless --allow-large is given.
 `;
 
 /** Parsed `beam up` CLI values, threaded to the phase helpers that need them. */
@@ -148,10 +154,10 @@ export async function cmdUp(args: string[]): Promise<void> {
   const env = resolveEnv();
   const config = loadConfig(env);
   const localCwd = process.cwd();
-  // Pure local checks first — layout, reserved names, mirror size — so a
-  // doomed ship fails before the reservation claims a (possibly exclusive)
-  // target or any remote effect runs.
-  await upLocalPreflights({ localCwd, config, allowLarge: values["allow-large"] === true });
+  // Pure local checks first — flag conflicts, layout, reserved names,
+  // mirror size — so a doomed ship fails before the reservation claims a
+  // (possibly exclusive) target or any remote effect runs.
+  await upLocalPreflights({ localCwd, config, values });
 
   const resolved = resolveUpTarget({ env, config, localCwd, requested: values.target });
   const detected = values["no-session"]
@@ -202,19 +208,29 @@ const MAX_SHIP_BYTES = 2 * 1024 ** 3;
 
 /**
  * Pure local preflights, BEFORE the target reservation and any remote
- * effect: an unshippable Git layout, a reserved-name collision, or an
- * oversized mirror fails here — not after a (possibly exclusive) target is
- * claimed or hours of staging and transfer are sunk. `--allow-large` is
- * the explicit license for a genuinely huge ship and skips the size walk.
+ * effect: a contradictory flag pair, an unshippable Git layout, a
+ * reserved-name collision, or an oversized mirror fails here — not after a
+ * (possibly exclusive) target is claimed or hours of staging and transfer
+ * are sunk. `--allow-large` is the explicit license for a genuinely huge
+ * ship and skips the size walk.
  */
 async function upLocalPreflights(o: {
   localCwd: string;
   config: Config;
-  allowLarge: boolean;
+  values: UpValues;
 }): Promise<void> {
+  // `--no-session` starts no agent, so a kickoff would vanish silently and
+  // the ship would look dead from the outside (#37).
+  if (o.values["no-session"] && o.values.message !== undefined) {
+    throw new Error(
+      `beam up: --no-session ships the workspace only — no session travels and no agent ` +
+        `starts, so a kickoff message (-m) has nothing to receive it. Drop --no-session to ` +
+        `resume this workspace's session with the kickoff, or drop -m to ship only`,
+    );
+  }
   assertShippableGitLayout(o.localCwd);
   await assertNoLocalReservedCollision(o.localCwd);
-  if (o.allowLarge) return;
+  if (o.values["allow-large"]) return;
   const shipBytes = await assertShipSizeBounded(o.localCwd, gatherExcludes(o.localCwd, o.config), {
     bytesMax: MAX_SHIP_BYTES,
   });
@@ -2001,8 +2017,15 @@ function upPromoteToUp(
       console.log(`  note:    no kickoff message — the agent idles until you attach or re-up -m`);
     }
   } else {
+    // Never silent: a ship that started nothing must say so, or it looks
+    // dead from the outside (#37).
     if (o.detected) {
       console.log(`  agent not started (--no-start); resume manually in ${ship.remoteCwd}`);
+    } else {
+      console.log(
+        `  agent not started (--no-session): no session shipped; re-up without --no-session ` +
+          `to resume one`,
+      );
     }
   }
   console.log(`  return:  beam down ${ship.id}`);
