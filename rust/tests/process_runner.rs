@@ -1,12 +1,14 @@
 //! Goal: preserve the TypeScript process runner's observable safety contract:
-//! stdout and stderr drain concurrently, each stream has its own hard byte
-//! cap, input and environment shaping are exact, and nonzero exits remain
+//! stdout and stderr drain concurrently, each stream has hard byte and line
+//! caps, input and environment shaping are exact, and nonzero exits remain
 //! data unless the caller asks for a checked run.
 //!
 //! Method: run real POSIX children that fill both OS pipe buffers, cross each
-//! cap boundary, echo exact input, expose a cleared environment, and exit with
-//! a chosen code. Every child is bounded by the runner's timeout.
+//! cap boundary, stream complete stdout lines, echo exact input, expose a
+//! cleared environment, and exit with a chosen code. Every child is bounded
+//! by the runner's timeout.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
@@ -133,6 +135,55 @@ async fn kills_an_infinite_writer_when_stdout_crosses_the_cap() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn observes_complete_stdout_lines_and_rejects_before_child_exit() {
+    let lines = RefCell::new(Vec::new());
+    let observer = |line: &str| {
+        lines.borrow_mut().push(line.to_owned());
+        if line == "reject" {
+            return Err("fixture rejection".to_owned());
+        }
+        Ok(())
+    };
+    let error = run(
+        &[
+            "bash",
+            "-c",
+            "printf 'first\\n\\nreject\\n'; tail -f /dev/null",
+        ],
+        &RunOptions {
+            stdout_line_observer: Some(&observer),
+            timeout: TEST_TIMEOUT,
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect_err("the observer should reject and stop the waiting child");
+    assert_eq!(lines.into_inner(), ["first", "reject"]);
+    assert!(
+        error
+            .to_string()
+            .contains("stdout observer rejected output from bash: fixture rejection")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn caps_lines_on_each_captured_stream() {
+    for script in ["printf 'a\\nb\\nc\\n'", "printf 'a\\nb\\nc\\n' >&2"] {
+        let error = run(
+            &["bash", "-c", script],
+            &RunOptions {
+                max_output_lines: Some(2),
+                timeout: TEST_TIMEOUT,
+                ..RunOptions::default()
+            },
+        )
+        .await
+        .expect_err("a third output line should cross the independent cap");
+        assert!(error.to_string().contains("2-line per-stream cap on"));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn sends_exact_text_and_bytes_to_child_stdin() {
     let text_result = run(
         &["cat"],
@@ -251,6 +302,20 @@ async fn rejects_invalid_options_before_spawning() {
     assert_eq!(
         cap_error.to_string(),
         "run: max_output_bytes must be positive, got 0"
+    );
+
+    let lines_error = run(
+        &["true"],
+        &RunOptions {
+            max_output_lines: Some(0),
+            ..RunOptions::default()
+        },
+    )
+    .await
+    .expect_err("a zero line cap should fail before spawn");
+    assert_eq!(
+        lines_error.to_string(),
+        "run: max_output_lines must be positive when set"
     );
 
     let interactive_error = run(

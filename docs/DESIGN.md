@@ -836,12 +836,19 @@ delivery is also replayed: only allowlisted values enter an owner-guarded 0600
 file, the agent sources and removes it before launch, and failed starts remove
 both the workspace and staged credentials before becoming retryable. Captured
 subprocesses own a process group, so timeout and output-cap failures kill
-descendants that inherited their pipes. TypeScript goldens pin every generated
-workspace, git, session, runtime, and provider-core contract byte-exact. The
-provider core owns exact persisted sandbox-state variants, the dyn-compatible
-lifecycle trait, and `StaticProvider` construction for local and SSH targets.
-Managed providers and global provider selection are not yet ported, so the
-TypeScript binary still owns every user-visible command flow.
+descendants that inherited their pipes. The same bounded runner can deliver
+complete stdout lines before process exit; Box uses that path to journal its
+immutable ID before waiting for the ready event.
+
+TypeScript goldens pin every generated workspace, git, session, runtime, and
+provider contract reached so far. The provider core owns exact persisted
+sandbox-state variants, the dyn-compatible lifecycle trait, and
+`StaticProvider` construction for local and SSH targets. The managed-SSH
+foundation owns per-handoff keys and the pinned Linux bootstrap. `BoxProvider`
+now owns create, reconnect, stopped-VM resume, ephemeral-IP re-resolution,
+CLI-managed key authorization, and exact-ID deletion over `SshTransport`.
+E2B, Modal, Daytona, Agent Sandbox, global provider selection, and commands
+remain on TypeScript, which still owns every user-visible flow.
 
 ## Later
 

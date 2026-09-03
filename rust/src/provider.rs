@@ -13,8 +13,16 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::transport::Transport;
 
+mod box_provider;
+mod managed_ssh;
 mod static_provider;
 
+pub use box_provider::BoxProvider;
+pub use managed_ssh::{
+    ManagedLinuxBootstrapOptions, ManagedSshIdentity, ManagedSshProvider, assert_owner_token,
+    bootstrap_managed_linux, ensure_managed_ssh_identity, managed_ssh_check_lines,
+    managed_ssh_tools_ready, new_owner_token, remove_managed_ssh_identity,
+};
 pub use static_provider::StaticProvider;
 
 /// Dyn-compatible async result used by every provider lifecycle method.

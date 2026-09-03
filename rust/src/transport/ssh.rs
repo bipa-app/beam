@@ -78,6 +78,14 @@ impl SshTransport {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_command_environment(
+        &mut self,
+        environment: std::collections::BTreeMap<String, String>,
+    ) {
+        self.command_environment = Some(environment);
+    }
+
     fn process_options(&self, interactive: bool) -> RunOptions<'_> {
         RunOptions {
             #[cfg(test)]

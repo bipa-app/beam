@@ -2,9 +2,11 @@
 //! byte-exactly by `parity/goldens/shell-quoting.json`.
 
 use std::collections::BTreeMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt::{Display, Formatter};
-use std::path::Path;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
@@ -31,6 +33,8 @@ pub enum RunInput<'a> {
     Bytes(&'a [u8]),
 }
 
+pub type OutputLineObserver<'a> = dyn Fn(&str) -> Result<(), String> + 'a;
+
 pub struct RunOptions<'a> {
     pub cwd: Option<&'a Path>,
     pub env: Option<&'a BTreeMap<String, String>>,
@@ -38,6 +42,8 @@ pub struct RunOptions<'a> {
     pub interactive: bool,
     pub input: RunInput<'a>,
     pub max_output_bytes: usize,
+    pub max_output_lines: Option<usize>,
+    pub stdout_line_observer: Option<&'a OutputLineObserver<'a>>,
     pub timeout: Duration,
 }
 
@@ -50,6 +56,8 @@ impl Default for RunOptions<'_> {
             interactive: false,
             input: RunInput::Ignore,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            max_output_lines: None,
+            stdout_line_observer: None,
             timeout: DEFAULT_TIMEOUT,
         }
     }
@@ -76,6 +84,14 @@ enum ProcessIoError {
         source: std::io::Error,
     },
     OutputOverflow(&'static str),
+    OutputLinesOverflow {
+        stream: &'static str,
+        max_output_lines: usize,
+    },
+    OutputLine {
+        stream: &'static str,
+        message: String,
+    },
     Wait(std::io::Error),
 }
 
@@ -124,6 +140,30 @@ pub fn shq_remote_path(path: &str) -> String {
     shq(path)
 }
 
+/// Resolve an executable through the environment that will be passed to a
+/// child. Explicit base environments never fall back to the parent process.
+pub fn which(program: &str, base_env: Option<&BTreeMap<String, String>>) -> Option<PathBuf> {
+    if program.is_empty() {
+        return None;
+    }
+    if program.contains('/') {
+        let candidate = PathBuf::from(program);
+        return executable_file(&candidate).then_some(candidate);
+    }
+    let path = match base_env {
+        Some(environment) => environment.get("PATH").map(OsString::from),
+        None => std::env::var_os("PATH"),
+    }?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(program))
+        .find(|candidate| executable_file(candidate))
+}
+
+fn executable_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
 /// Run an argv. Nonzero exit is data; spawn, I/O, cap, and timeout failures
 /// are errors.
 pub async fn run<S>(argv: &[S], options: &RunOptions<'_>) -> Result<RunResult, RunError>
@@ -140,6 +180,11 @@ where
             message: "run: max_output_bytes must be positive, got 0".to_owned(),
         });
     }
+    if options.max_output_lines == Some(0) {
+        return Err(RunError {
+            message: "run: max_output_lines must be positive when set".to_owned(),
+        });
+    }
     if options.timeout.is_zero() {
         return Err(RunError {
             message: "run: timeout must be positive".to_owned(),
@@ -153,6 +198,11 @@ where
                     message: "run: interactive commands cannot receive captured stdin".to_owned(),
                 });
             }
+        }
+        if options.stdout_line_observer.is_some() {
+            return Err(RunError {
+                message: "run: interactive commands cannot observe captured stdout".to_owned(),
+            });
         }
     }
 
@@ -280,8 +330,20 @@ async fn run_captured(
     let operation = async {
         let ((), stdout, stderr) = tokio::try_join!(
             write_input(stdin, options.input),
-            capture_stream(stdout, "stdout", options.max_output_bytes),
-            capture_stream(stderr, "stderr", options.max_output_bytes),
+            capture_stream(
+                stdout,
+                "stdout",
+                options.max_output_bytes,
+                options.max_output_lines,
+                options.stdout_line_observer,
+            ),
+            capture_stream(
+                stderr,
+                "stderr",
+                options.max_output_bytes,
+                options.max_output_lines,
+                None,
+            ),
         )?;
         let status = child.wait().await.map_err(ProcessIoError::Wait)?;
         Ok::<_, ProcessIoError>((status, stdout, stderr))
@@ -335,12 +397,16 @@ async fn capture_stream<R>(
     mut stream: R,
     stream_name: &'static str,
     max_output_bytes: usize,
+    max_output_lines: Option<usize>,
+    line_observer: Option<&OutputLineObserver<'_>>,
 ) -> Result<Vec<u8>, ProcessIoError>
 where
     R: AsyncRead + Unpin,
 {
     let mut captured = Vec::with_capacity(max_output_bytes.min(READ_BUFFER_BYTES));
     let mut buffer = [0_u8; READ_BUFFER_BYTES];
+    let mut line_start = 0;
+    let mut line_count = 0;
     loop {
         let read_bytes =
             stream
@@ -357,8 +423,57 @@ where
             return Err(ProcessIoError::OutputOverflow(stream_name));
         }
         captured.extend_from_slice(&buffer[..read_bytes]);
+        while let Some(relative_end) = captured[line_start..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let line_end = line_start + relative_end;
+            observe_line(
+                &captured[line_start..line_end],
+                stream_name,
+                max_output_lines,
+                line_observer,
+                &mut line_count,
+            )?;
+            line_start = line_end + 1;
+        }
+    }
+    if line_start < captured.len() {
+        observe_line(
+            &captured[line_start..],
+            stream_name,
+            max_output_lines,
+            line_observer,
+            &mut line_count,
+        )?;
     }
     Ok(captured)
+}
+
+fn observe_line(
+    bytes: &[u8],
+    stream: &'static str,
+    max_output_lines: Option<usize>,
+    observer: Option<&OutputLineObserver<'_>>,
+    line_count: &mut usize,
+) -> Result<(), ProcessIoError> {
+    *line_count += 1;
+    if let Some(maximum) = max_output_lines
+        && *line_count > maximum
+    {
+        return Err(ProcessIoError::OutputLinesOverflow {
+            stream,
+            max_output_lines: maximum,
+        });
+    }
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    if let Some(observer) = observer {
+        let line = String::from_utf8_lossy(bytes);
+        observer(&line).map_err(|message| ProcessIoError::OutputLine { stream, message })?;
+    }
+    Ok(())
 }
 
 async fn terminate_process_group(child: &mut Child) -> Result<(), std::io::Error> {
@@ -454,6 +569,18 @@ fn process_io_error(
                 "command output exceeded the {max_output_bytes}-byte per-stream cap on \
                  {stream}: {program}"
             )
+        }
+        ProcessIoError::OutputLinesOverflow {
+            stream,
+            max_output_lines,
+        } => {
+            format!(
+                "command output exceeded the {max_output_lines}-line per-stream cap on \
+                 {stream}: {program}"
+            )
+        }
+        ProcessIoError::OutputLine { stream, message } => {
+            format!("command {stream} observer rejected output from {program}: {message}")
         }
         ProcessIoError::Wait(source) => {
             format!("could not wait for {program}: {source}")
